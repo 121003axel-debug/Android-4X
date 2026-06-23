@@ -1,0 +1,392 @@
+/*
+ * Android 4.2 Jelly Bean - Holo Dark Global CSS Theme
+ * Recreating the classic Holo aesthetic - pure black backgrounds,
+ * vibrant Holo Blue (#33B5E5) highlights, Roboto typography, and flat, thin-bordered elements.
+ */
+
+:root {
+  /* Holo Color Palette */
+  --holo-blue-bright: #33b5e5;
+  --holo-blue-dark: #0099cc;
+  --holo-blue-semi: rgba(51, 181, 229, 0.3);
+  --holo-bg-black: #000000;
+  --holo-bg-dark-gray: #1a1a1a;
+  --holo-bg-light-gray: #2e2e2e;
+  --holo-border-gray: #4a4a4a;
+  --holo-text-white: #ffffff;
+  --holo-text-gray: #8c8c8c;
+  --holo-text-blue: #33b5e5;
+  
+  /* System Values */
+  --holo-border-radius: 4px;
+  --holo-font-display: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  --holo-font-mono: 'Roboto Mono', 'Droid Sans Mono', monospace;
+}
+
+/* Global Styles */
+body {
+  background-color: var(--holo-bg-black);
+  color: var(--holo-text-white);
+  font-family: var(--holo-font-display);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography Custom Classes */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--holo-font-display);
+  font-weight: 300; /* Holo Light fonts */
+  color: var(--holo-text-white);
+  margin-top: 0;
+  letter-spacing: -0.5px;
+}
+
+h1 {
+  font-size: 28px;
+  border-bottom: 2px solid var(--holo-blue-bright);
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 22px;
+  color: var(--holo-text-blue);
+  font-weight: 400;
+}
+
+h3 {
+  font-size: 18px;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.holo-text-glow {
+  text-shadow: 0 0 8px rgba(51, 181, 229, 0.6);
+}
+
+.holo-subtext {
+  font-size: 12px;
+  color: var(--holo-text-gray);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Classic Holo Divider/Separator Lines */
+.holo-divider {
+  height: 1px;
+  background-color: var(--holo-border-gray);
+  width: 100%;
+  margin: 12px 0;
+}
+
+.holo-divider.blue {
+  background: linear-gradient(90deg, var(--holo-blue-bright), transparent);
+  height: 2px;
+}
+
+/* Interactive Components: Buttons */
+button, .holo-button {
+  background-color: var(--holo-bg-light-gray);
+  color: var(--holo-text-white);
+  border: 1px solid var(--holo-border-gray);
+  border-radius: var(--holo-border-radius);
+  padding: 10px 16px;
+  font-family: var(--holo-font-display);
+  font-size: 15px;
+  font-weight: 500;
+  text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease-in-out;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+button:hover, .holo-button:hover {
+  background-color: #383838;
+  border-color: var(--holo-text-gray);
+}
+
+button:active, .holo-button:active, .holo-button.active {
+  background-color: var(--holo-blue-bright);
+  color: var(--holo-bg-black);
+  border-color: var(--holo-blue-bright);
+  box-shadow: 0 0 12px var(--holo-blue-bright);
+  font-weight: bold;
+}
+
+/* Borderless Buttons (Holo Action Style) */
+.holo-button-borderless {
+  background: transparent;
+  border: none;
+  color: var(--holo-text-white);
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: var(--holo-border-radius);
+  transition: background 0.2s;
+}
+
+.holo-button-borderless:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.holo-button-borderless:active {
+  background: var(--holo-blue-semi);
+  color: var(--holo-text-blue);
+}
+
+/* Text Inputs / Spinners */
+input[type="text"], input[type="password"], textarea, select {
+  background-color: var(--holo-bg-black);
+  border: none;
+  border-bottom: 2px solid var(--holo-border-gray);
+  color: var(--holo-text-white);
+  padding: 8px 6px;
+  font-family: var(--holo-font-display);
+  font-size: 16px;
+  outline: none;
+  border-radius: 0;
+  transition: border-bottom-color 0.2s, box-shadow 0.2s;
+}
+
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+  border-bottom: 2px solid var(--holo-blue-bright);
+  box-shadow: 0 1px 0 var(--holo-blue-bright);
+}
+
+/* Custom Checkboxes */
+.holo-checkbox-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 12px;
+}
+
+.holo-checkbox-container input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.holo-checkmark {
+  position: relative;
+  height: 18px;
+  width: 18px;
+  background-color: var(--holo-bg-black);
+  border: 2px solid var(--holo-border-gray);
+  border-radius: 2px;
+  margin-right: 8px;
+}
+
+.holo-checkbox-container:hover input ~ .holo-checkmark {
+  border-color: var(--holo-text-gray);
+}
+
+.holo-checkbox-container input:checked ~ .holo-checkmark {
+  border-color: var(--holo-blue-bright);
+}
+
+.holo-checkmark::after {
+  content: "";
+  position: absolute;
+  display: none;
+}
+
+.holo-checkbox-container input:checked ~ .holo-checkmark::after {
+  display: block;
+}
+
+.holo-checkbox-container .holo-checkmark::after {
+  left: 5px;
+  top: 1px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--holo-blue-bright);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Switch Widgets (ON/OFF toggles) */
+.holo-switch {
+  position: relative;
+  display: inline-block;
+  width: 74px;
+  height: 26px;
+  user-select: none;
+}
+
+.holo-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.holo-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: var(--holo-bg-light-gray);
+  border: 1px solid var(--holo-border-gray);
+  border-radius: 2px;
+  transition: .15s;
+}
+
+.holo-switch-slider::before {
+  content: "OFF";
+  position: absolute;
+  text-align: center;
+  color: var(--holo-text-gray);
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 24px;
+  width: 36px;
+  height: 24px;
+  left: 0;
+  bottom: 0;
+  background-color: #222222;
+  border-right: 1px solid var(--holo-border-gray);
+}
+
+.holo-switch input:checked + .holo-switch-slider {
+  background-color: rgba(51, 181, 229, 0.15);
+  border-color: var(--holo-blue-bright);
+}
+
+.holo-switch input:checked + .holo-switch-slider::before {
+  content: "ON";
+  color: var(--holo-blue-bright);
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--holo-blue-bright);
+  box-shadow: 0 0 6px rgba(51, 181, 229, 0.4);
+}
+
+/* Dialogs & Cards (Holo Theme Blue Borders & Blue Headers) */
+.holo-window {
+  background-color: #121212;
+  border: 1px solid var(--holo-border-gray);
+  border-radius: var(--holo-border-radius);
+  overflow: hidden;
+}
+
+.holo-window-header {
+  background-color: #171717;
+  border-bottom: 2px solid var(--holo-blue-bright);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.holo-window-title {
+  color: var(--holo-blue-bright);
+  font-size: 18px;
+  font-weight: normal;
+  margin: 0;
+}
+
+.holo-body {
+  padding: 16px;
+}
+
+/* Action Bar Styles */
+.holo-action-bar {
+  background-color: #0f0f0f;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid var(--holo-blue-bright);
+  padding: 0 12px;
+}
+
+.holo-action-title {
+  font-size: 18px;
+  font-weight: light;
+  color: var(--holo-text-white);
+  margin-left: 8px;
+}
+
+/* List Views */
+.holo-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.holo-list-item {
+  padding: 14px 16px;
+  border-bottom: 1px solid #222222;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.holo-list-item:hover {
+  background-color: rgba(255,255,255, 0.04);
+}
+
+.holo-list-item:active {
+  background-color: var(--holo-blue-semi);
+}
+
+/* Tabs */
+.holo-tabs {
+  display: flex;
+  border-bottom: 2px solid #222222;
+  width: 100%;
+}
+
+.holo-tab-item {
+  flex: 1;
+  text-align: center;
+  padding: 12px 0;
+  color: var(--holo-text-gray);
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+}
+
+.holo-tab-item:hover {
+  color: var(--holo-text-white);
+}
+
+.holo-tab-item.active {
+  color: var(--holo-text-blue);
+  border-bottom-color: var(--holo-blue-bright);
+}
+
+/* Seek Bar / Sliders */
+.holo-slider-container {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.holo-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--holo-border-gray);
+  outline: none;
+  border-radius: 2px;
+}
+
+.holo-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--holo-blue-bright);
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--holo-blue-bright);
+}

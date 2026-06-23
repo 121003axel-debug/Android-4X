@@ -1,0 +1,6 @@
+{
+  "name": "JellyBean Sim",
+  "description": "Un simulador interactivo de Android 4.1 Jelly Bean con interfaz Holo clásica, búsqueda inteligente con Gemini y creador de imágenes por IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
