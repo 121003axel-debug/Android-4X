@@ -13,6 +13,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.*
@@ -235,7 +236,9 @@ enum class AppType(val appName: String) {
     THEMES("Temas"),
     AI_GENERATOR("Creador IA"),
     SOUND_RECORDER("Grabadora"),
-    DOWNLOADS("Descargas")
+    DOWNLOADS("Descargas"),
+    NOTES("Notas"),
+    RADIO("Radio FM")
 }
 
 data class ChatMessage(
@@ -270,10 +273,36 @@ data class JellyBean(
     val labelName: String
 )
 
+data class NoteItem(
+    val id: String,
+    val title: String,
+    val content: String,
+    val date: String
+)
+
+fun serializeNotes(notes: List<NoteItem>): String {
+    return notes.joinToString("::[NOTE_SEP]::") { 
+        "${it.id}::[PART]::${it.title}::[PART]::${it.content}::[PART]::${it.date}" 
+    }
+}
+
+fun deserializeNotes(serialized: String): List<NoteItem> {
+    if (serialized.isEmpty()) return emptyList()
+    val list = mutableListOf<NoteItem>()
+    val notesRaw = serialized.split("::[NOTE_SEP]::")
+    for (raw in notesRaw) {
+        val parts = raw.split("::[PART]::")
+        if (parts.size >= 4) {
+            list.add(NoteItem(parts[0], parts[1], parts[2], parts[3]))
+        }
+    }
+    return list
+}
+
 // ==========================================
 // VIEWMODEL FOR JELLY BEAN SIMULATION
 // ==========================================
-class JellyBeanViewModel : ViewModel() {
+class JellyBeanViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentTime = MutableStateFlow("12:00")
     val currentTime = _currentTime.asStateFlow()
 
@@ -299,35 +328,53 @@ class JellyBeanViewModel : ViewModel() {
     val showRecentAppsOverlay = _showRecentAppsOverlay.asStateFlow()
 
     // Wi-Fi and Signals States
-    private val _isWifiEnabled = MutableStateFlow(true)
+    private val _isWifiEnabled = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getBoolean("wifi_enabled", true)
+    )
     val isWifiEnabled = _isWifiEnabled.asStateFlow()
 
-    private val _isBluetoothEnabled = MutableStateFlow(true)
+    private val _isBluetoothEnabled = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getBoolean("bluetooth_enabled", true)
+    )
     val isBluetoothEnabled = _isBluetoothEnabled.asStateFlow()
 
-    private val _isLocationEnabled = MutableStateFlow(true)
+    private val _isLocationEnabled = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getBoolean("location_enabled", true)
+    )
     val isLocationEnabled = _isLocationEnabled.asStateFlow()
 
-    private val _isDataEnabled = MutableStateFlow(true)
+    private val _isDataEnabled = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getBoolean("data_enabled", true)
+    )
     val isDataEnabled = _isDataEnabled.asStateFlow()
 
     // Wallpaper Selection (Local and Generated)
     private val _wallpaperSelected = MutableStateFlow<Bitmap?>(null)
     val wallpaperSelected = _wallpaperSelected.asStateFlow()
 
-    private val _themeColorProfile = MutableStateFlow("BLUE") // BLUE, PURPLE, GREEN, RED, AMBER
+    private val _themeColorProfile = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getString("theme_color", "BLUE") ?: "BLUE"
+    )
     val themeColorProfile = _themeColorProfile.asStateFlow()
 
     fun setThemeColorProfile(profile: String) {
         _themeColorProfile.value = profile
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putString("theme_color", profile).apply()
+        updateHashFromState()
     }
 
-    private val _wallpaperPreset = MutableStateFlow("WAVES") // WAVES, SOLID, GRADIENT, NEXUS
+    private val _wallpaperPreset = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getString("wallpaper_preset", "WAVES") ?: "WAVES"
+    )
     val wallpaperPreset = _wallpaperPreset.asStateFlow()
 
     fun setWallpaperPreset(preset: String) {
         _wallpaperSelected.value = null
         _wallpaperPreset.value = preset
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putString("wallpaper_preset", preset).apply()
+        updateHashFromState()
     }
 
     // Google Folder Popup
@@ -347,8 +394,97 @@ class JellyBeanViewModel : ViewModel() {
     private val _isAirplaneModeEnabled = MutableStateFlow(false)
     val isAirplaneModeEnabled = _isAirplaneModeEnabled.asStateFlow()
 
-    private val _ownerName = MutableStateFlow("Administrador Jelly Bean")
+    private val _ownerName = MutableStateFlow(
+        application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE).getString("owner_name", "Administrador Jelly Bean") ?: "Administrador Jelly Bean"
+    )
     val ownerName = _ownerName.asStateFlow()
+
+    // NOTES STATE & PERSISTENCE
+    private val _notes = MutableStateFlow<List<NoteItem>>(emptyList())
+    val notes = _notes.asStateFlow()
+
+    private fun saveNotesToPrefs(list: List<NoteItem>) {
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putString("notes_list", serializeNotes(list)).apply()
+    }
+
+    fun defaultNotes() = listOf(
+        NoteItem("1", "Bienvenido a Jelly Bean", "Esta es tu nueva aplicación de notas con estilo Holo retro de Android 4.1. ¡Disfrútala!", "25 Jun 2026"),
+        NoteItem("2", "Lista de tareas", "- Probar el navegador con páginas reales\n- Ajustar el reloj analógico en el escritorio\n- Probar la cámara con IA", "25 Jun 2026")
+    )
+
+    fun addNote(title: String, content: String) {
+        val nextId = java.util.UUID.randomUUID().toString()
+        val sdf = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale("es", "ES"))
+        val dateStr = sdf.format(java.util.Date())
+        val newNote = NoteItem(nextId, title, content, dateStr)
+        _notes.value = _notes.value + newNote
+        saveNotesToPrefs(_notes.value)
+        postNotification("Notas", "Nota guardada: $title", AppType.NOTES)
+    }
+
+    fun updateNote(id: String, title: String, content: String) {
+        val sdf = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale("es", "ES"))
+        val dateStr = sdf.format(java.util.Date())
+        _notes.value = _notes.value.map {
+            if (it.id == id) it.copy(title = title, content = content, date = dateStr) else it
+        }
+        saveNotesToPrefs(_notes.value)
+    }
+
+    fun deleteNote(id: String) {
+        val note = _notes.value.firstOrNull { it.id == id }
+        _notes.value = _notes.value.filter { it.id != id }
+        saveNotesToPrefs(_notes.value)
+        if (note != null) {
+            postNotification("Notas", "Nota eliminada: ${note.title}", AppType.NOTES)
+        }
+    }
+
+    // HASH ROUTER NAVIGATION SYSTEM
+    private val _navigationHash = MutableStateFlow("#/lockscreen")
+    val navigationHash = _navigationHash.asStateFlow()
+
+    fun navigateByHash(hash: String) {
+        if (hash.isEmpty()) return
+        _navigationHash.value = hash
+        when {
+            hash == "#/lockscreen" -> {
+                _isLocked.value = true
+                _isDrawerOpen.value = false
+                _activeApp.value = null
+            }
+            hash == "#/home" -> {
+                _isLocked.value = false
+                _isDrawerOpen.value = false
+                _activeApp.value = null
+            }
+            hash == "#/drawer" -> {
+                _isLocked.value = false
+                _isDrawerOpen.value = true
+                _activeApp.value = null
+            }
+            hash.startsWith("#/app/") -> {
+                val appName = hash.substringAfter("#/app/")
+                val targetApp = AppType.entries.firstOrNull { it.name == appName }
+                if (targetApp != null) {
+                    _isLocked.value = false
+                    _isDrawerOpen.value = false
+                    _activeApp.value = targetApp
+                }
+            }
+        }
+    }
+
+    fun updateHashFromState() {
+        val hash = when {
+            _isLocked.value -> "#/lockscreen"
+            _activeApp.value != null -> "#/app/${_activeApp.value!!.name}"
+            _isDrawerOpen.value -> "#/drawer"
+            else -> "#/home"
+        }
+        _navigationHash.value = hash
+    }
 
     // Sound and Dark Theme Settings
     private val _systemSoundsEnabled = MutableStateFlow(true)
@@ -363,6 +499,19 @@ class JellyBeanViewModel : ViewModel() {
 
     private val _analogClockWidgetOffset = MutableStateFlow(androidx.compose.ui.geometry.Offset(0f, 0f))
     val analogClockWidgetOffset = _analogClockWidgetOffset.asStateFlow()
+
+    // Battery Widget and Simulated Battery State
+    private val _isBatteryWidgetActive = MutableStateFlow(true) // Start active so they can see it initially! Or false, but true makes it immediately visible
+    val isBatteryWidgetActive = _isBatteryWidgetActive.asStateFlow()
+
+    private val _batteryWidgetOffset = MutableStateFlow(androidx.compose.ui.geometry.Offset(100f, 250f))
+    val batteryWidgetOffset = _batteryWidgetOffset.asStateFlow()
+
+    private val _batteryLevel = MutableStateFlow(78)
+    val batteryLevel = _batteryLevel.asStateFlow()
+
+    private val _isBatteryCharging = MutableStateFlow(false)
+    val isBatteryCharging = _isBatteryCharging.asStateFlow()
 
     // Active App Drawer Tab
     private val _activeAppDrawerTab = MutableStateFlow("APPS")
@@ -459,36 +608,9 @@ class JellyBeanViewModel : ViewModel() {
     }
 
     fun playNotificationMelody(soundName: String) {
-        CoroutineScope(Dispatchers.Default).launch {
-            val tg = try {
-                android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
-            } catch (e: Exception) {
-                null
-            } ?: return@launch
-
-            try {
-                when (soundName) {
-                    "Simple Tick" -> {
-                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 40)
-                    }
-                    "Jelly Bean Ack" -> {
-                        tg.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 120)
-                    }
-                    "Double Beep" -> {
-                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 50)
-                        delay(100)
-                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 50)
-                    }
-                    "Bubble Pop" -> {
-                        tg.startTone(android.media.ToneGenerator.TONE_DTMF_5, 60)
-                    }
-                }
-            } catch (e: Exception) {
-                // ignore
-            } finally {
-                tg.release()
-            }
-        }
+        if (!_systemSoundsEnabled.value) return
+        if (_soundProfile.value != "SOUND") return
+        RetroSoundSynth.playSound(soundName)
     }
 
     // Simulated Downloads state
@@ -532,23 +654,8 @@ class JellyBeanViewModel : ViewModel() {
 
     fun playSystemSound(soundType: String) {
         if (!_systemSoundsEnabled.value) return
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                if (toneGenerator == null) {
-                    toneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_SYSTEM, 100)
-                }
-                val tg = toneGenerator ?: return@launch
-                when (soundType) {
-                    "click" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 40)
-                    "notification" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 120)
-                    "volume" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 100)
-                    "multimedia" -> tg.startTone(android.media.ToneGenerator.TONE_DTMF_A, 150)
-                    "ringtone" -> tg.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE, 500)
-                }
-            } catch (e: Exception) {
-                // Audio not supported in some container formats
-            }
-        }
+        if (_soundProfile.value != "SOUND") return
+        RetroSoundSynth.playSound(soundType)
     }
 
     fun setSystemSoundsEnabled(enabled: Boolean) {
@@ -568,6 +675,28 @@ class JellyBeanViewModel : ViewModel() {
 
     fun setAnalogClockWidgetOffset(offset: androidx.compose.ui.geometry.Offset) {
         _analogClockWidgetOffset.value = offset
+    }
+
+    fun setBatteryWidgetActive(active: Boolean) {
+        _isBatteryWidgetActive.value = active
+        playSystemSound("click")
+    }
+
+    fun setBatteryWidgetOffset(offset: androidx.compose.ui.geometry.Offset) {
+        _batteryWidgetOffset.value = offset
+    }
+
+    fun setBatteryLevel(level: Int) {
+        _batteryLevel.value = level.coerceIn(0, 100)
+    }
+
+    fun toggleBatteryCharging() {
+        _isBatteryCharging.value = !_isBatteryCharging.value
+        playSystemSound("click")
+    }
+
+    fun setBatteryCharging(charging: Boolean) {
+        _isBatteryCharging.value = charging
     }
 
     fun setActiveAppDrawerTab(tab: String) {
@@ -721,7 +850,8 @@ class JellyBeanViewModel : ViewModel() {
             AppType.CAMERA, AppType.GALLERY, AppType.CALCULATOR, AppType.SETTINGS,
             AppType.MAPS, AppType.MARKET, AppType.CLOCK, AppType.MUSIC,
             AppType.CALENDAR, AppType.ABOUT, AppType.FILE_MANAGER, AppType.THEMES,
-            AppType.AI_GENERATOR, AppType.SOUND_RECORDER, AppType.DOWNLOADS
+            AppType.AI_GENERATOR, AppType.SOUND_RECORDER, AppType.DOWNLOADS,
+            AppType.NOTES, AppType.RADIO
         )
     )
     val installedApps = _installedApps.asStateFlow()
@@ -740,6 +870,17 @@ class JellyBeanViewModel : ViewModel() {
     val jellyBeansParticles = _jellyBeansParticles.asStateFlow()
 
     init {
+        // Load notes from SharedPreferences
+        val notesStr = application.getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .getString("notes_list", "") ?: ""
+        if (notesStr.isEmpty()) {
+            _notes.value = defaultNotes()
+            saveNotesToPrefs(defaultNotes())
+        } else {
+            _notes.value = deserializeNotes(notesStr)
+        }
+        updateHashFromState()
+
         // Start live clock updates
         CoroutineScope(Dispatchers.Main).launch {
             while (true) {
@@ -753,10 +894,30 @@ class JellyBeanViewModel : ViewModel() {
     }
 
     // Wi-Fi Toggles
-    fun toggleWifi() { _isWifiEnabled.value = !_isWifiEnabled.value }
-    fun toggleBluetooth() { _isBluetoothEnabled.value = !_isBluetoothEnabled.value }
-    fun toggleLocation() { _isLocationEnabled.value = !_isLocationEnabled.value }
-    fun toggleData() { _isDataEnabled.value = !_isDataEnabled.value }
+    fun toggleWifi() {
+        val next = !_isWifiEnabled.value
+        _isWifiEnabled.value = next
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("wifi_enabled", next).apply()
+    }
+    fun toggleBluetooth() {
+        val next = !_isBluetoothEnabled.value
+        _isBluetoothEnabled.value = next
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("bluetooth_enabled", next).apply()
+    }
+    fun toggleLocation() {
+        val next = !_isLocationEnabled.value
+        _isLocationEnabled.value = next
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("location_enabled", next).apply()
+    }
+    fun toggleData() {
+        val next = !_isDataEnabled.value
+        _isDataEnabled.value = next
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("data_enabled", next).apply()
+    }
 
     fun toggleQuickSettingsMode() {
         _isQuickSettingsActive.value = !_isQuickSettingsActive.value
@@ -788,25 +949,49 @@ class JellyBeanViewModel : ViewModel() {
 
     fun setOwnerName(name: String) {
         _ownerName.value = name
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().putString("owner_name", name).apply()
+    }
+
+    fun resetSimulator() {
+        getApplication<Application>().getSharedPreferences("jellybean_prefs", Context.MODE_PRIVATE)
+            .edit().clear().apply()
+        _ownerName.value = "Administrador Jelly Bean"
+        _themeColorProfile.value = "BLUE"
+        _wallpaperPreset.value = "WAVES"
+        _isWifiEnabled.value = true
+        _isBluetoothEnabled.value = true
+        _isLocationEnabled.value = true
+        _isDataEnabled.value = true
+        _isAnalogClockWidgetActive.value = true
+        _notes.value = defaultNotes()
+        postNotification("Sistema", "El dispositivo ha sido restablecido de fábrica.", AppType.SETTINGS)
+        goHome()
     }
 
     fun unlock() {
         _isLocked.value = false
+        updateHashFromState()
+        playSystemSound("unlock")
     }
 
     fun lock() {
         _isLocked.value = true
         _isDrawerOpen.value = false
         _activeApp.value = null
+        updateHashFromState()
+        playSystemSound("lock")
     }
 
     fun openDrawer() {
         _isDrawerOpen.value = true
         _isGoogleFolderOpen.value = false
+        updateHashFromState()
     }
 
     fun closeDrawer() {
         _isDrawerOpen.value = false
+        updateHashFromState()
     }
 
     fun openGoogleFolder() {
@@ -826,10 +1011,12 @@ class JellyBeanViewModel : ViewModel() {
         if (!_recentAppsList.value.contains(app)) {
             _recentAppsList.value = listOf(app) + _recentAppsList.value
         }
+        updateHashFromState()
     }
 
     fun closeActiveApp() {
         _activeApp.value = null
+        updateHashFromState()
     }
 
     fun goHome() {
@@ -837,6 +1024,7 @@ class JellyBeanViewModel : ViewModel() {
         _isDrawerOpen.value = false
         _isGoogleFolderOpen.value = false
         _showRecentAppsOverlay.value = false
+        updateHashFromState()
     }
 
     fun toggleRecentApps() {
@@ -970,6 +1158,7 @@ class JellyBeanViewModel : ViewModel() {
 
         _cameraGenerating.value = true
         _cameraError.value = null
+        playSystemSound("camera")
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -1261,12 +1450,23 @@ class JellyBeanViewModel : ViewModel() {
     // ==========================================
     data class MusicTrack(val id: Int, val title: String, val artist: String, val durationSec: Int)
 
-    val musicTracks = listOf(
-        MusicTrack(1, "Ursa Major (Jelly Bean Retro)", "Google Retro Band", 145),
-        MusicTrack(2, "Bossa de la Sonda", "Androides del Espacio", 182),
-        MusicTrack(3, "Holo Blue Symphony", "Duarte & Sola", 210),
-        MusicTrack(4, "Sweet Marshmallow Beat", "Key Lime Pi", 160)
+    private val _musicTracksState = MutableStateFlow(
+        listOf(
+            MusicTrack(1, "Ursa Major (Jelly Bean Retro)", "Google Retro Band", 145),
+            MusicTrack(2, "Bossa de la Sonda", "Androides del Espacio", 182),
+            MusicTrack(3, "Holo Blue Symphony", "Duarte & Sola", 210),
+            MusicTrack(4, "Sweet Marshmallow Beat", "Key Lime Pi", 160)
+        )
     )
+    val musicTracksState = _musicTracksState.asStateFlow()
+    val musicTracks: List<MusicTrack> get() = _musicTracksState.value
+
+    fun addMusicTrack(title: String, artist: String, durationSec: Int) {
+        val nextId = _musicTracksState.value.size + 1
+        val newTrack = MusicTrack(nextId, title, artist, durationSec)
+        _musicTracksState.value = _musicTracksState.value + newTrack
+        postNotification("Play Music", "Importada exitosamente: $title", AppType.MUSIC)
+    }
 
     private val _currentTrackIndex = MutableStateFlow(0)
     val currentTrackIndex = _currentTrackIndex.asStateFlow()
@@ -1956,6 +2156,8 @@ fun HoloStatusBar(viewModel: JellyBeanViewModel) {
     val notifications by viewModel.notifications.collectAsState()
     val ticker by viewModel.notificationTicker.collectAsState()
     val soundProfile by viewModel.soundProfile.collectAsState()
+    val simulatedBatteryLevel by viewModel.batteryLevel.collectAsState()
+    val simulatedBatteryCharging by viewModel.isBatteryCharging.collectAsState()
 
     Row(
         modifier = Modifier
@@ -2052,19 +2254,32 @@ fun HoloStatusBar(viewModel: JellyBeanViewModel) {
                 modifier = Modifier.size(14.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .width(18.dp)
-                    .height(10.dp)
-                    .border(1.dp, Color(0xFF33B5E5), RoundedCornerShape(1.dp))
-                    .padding(1.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
+                if (simulatedBatteryCharging) {
+                    Icon(
+                        imageVector = Icons.Default.FlashOn,
+                        contentDescription = "Cargando",
+                        tint = Color(0xFF99CC00),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
                 Box(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.85f)
-                        .background(Color(0xFF33B5E5))
-                )
+                        .width(18.dp)
+                        .height(10.dp)
+                        .border(1.dp, if (simulatedBatteryCharging) Color(0xFF99CC00) else Color(0xFF33B5E5), RoundedCornerShape(1.dp))
+                        .padding(1.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth((simulatedBatteryLevel / 100f).coerceIn(0f, 1f))
+                            .background(if (simulatedBatteryCharging) Color(0xFF99CC00) else Color(0xFF33B5E5))
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
@@ -2130,7 +2345,14 @@ fun JellyBeanLockScreen(viewModel: JellyBeanViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0x1A33B5E5)),
                 border = BorderStroke(1.5.dp, Color(0xFF33B5E5)),
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.testTag("lock_screen_unlock_button")
+                modifier = Modifier
+                    .testTag("lock_screen_unlock_button")
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onLongPress = { viewModel.unlock() },
+                            onTap = { viewModel.unlock() }
+                        )
+                    }
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -2162,14 +2384,9 @@ fun JellyBeanLockScreen(viewModel: JellyBeanViewModel) {
             dragOffset
         }
 
-        val distToUnlock = (coercedOffset - Offset(targetDistancePx, 0f)).getDistance()
-        val distToCamera = (coercedOffset - Offset(-targetDistancePx, 0f)).getDistance()
-        val distToSearch = (coercedOffset - Offset(0f, -targetDistancePx)).getDistance()
-
-        val targetSelectionThreshold = with(density) { 40.dp.toPx() }
-        val isUnlockHighlighted = distToUnlock < targetSelectionThreshold
-        val isCameraHighlighted = distToCamera < targetSelectionThreshold
-        val isSearchHighlighted = distToSearch < targetSelectionThreshold
+        val isUnlockHighlighted = coercedOffset.x > targetDistancePx * 0.6f && kotlin.math.abs(coercedOffset.y) < targetDistancePx * 0.5f
+        val isCameraHighlighted = coercedOffset.x < -targetDistancePx * 0.6f && kotlin.math.abs(coercedOffset.y) < targetDistancePx * 0.5f
+        val isSearchHighlighted = coercedOffset.y < -targetDistancePx * 0.6f && kotlin.math.abs(coercedOffset.x) < targetDistancePx * 0.5f
 
         Box(
             modifier = Modifier
@@ -2395,12 +2612,117 @@ fun JellyBeanLockScreen(viewModel: JellyBeanViewModel) {
     }
 }
 
+@Composable
+fun JellyBeanBatteryWidget(
+    level: Int,
+    isCharging: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .width(145.dp)
+            .height(105.dp)
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color(0x990A0A0C)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            // Classic 4.1 battery vertical icon
+            Box(
+                modifier = Modifier
+                    .width(36.dp)
+                    .height(64.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Outer shell
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    // Draw battery tip (top)
+                    val tipHeight = 5.dp.toPx()
+                    val tipWidth = w * 0.4f
+                    drawRect(
+                        color = Color(0xFFCCCCCC),
+                        topLeft = Offset((w - tipWidth) / 2f, 0f),
+                        size = Size(tipWidth, tipHeight)
+                    )
+                    
+                    // Draw battery outer body
+                    drawRect(
+                        color = Color(0xFFCCCCCC),
+                        topLeft = Offset(0f, tipHeight),
+                        size = Size(w, h - tipHeight),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                    
+                    // Draw fill inside
+                    val fillMaxHeight = h - tipHeight - 6.dp.toPx()
+                    val fillHeight = fillMaxHeight * (level / 100f)
+                    val fillWidth = w - 6.dp.toPx()
+                    val fillColor = if (isCharging) Color(0xFF99CC00) else if (level <= 15) Color(0xFFFF4444) else Color(0xFF33B5E5)
+                    
+                    if (fillHeight > 0) {
+                        drawRect(
+                            color = fillColor,
+                            topLeft = Offset(3.dp.toPx(), tipHeight + 3.dp.toPx() + (fillMaxHeight - fillHeight)),
+                            size = Size(fillWidth, fillHeight)
+                        )
+                    }
+                }
+                
+                // Lightning bolt icon if charging
+                if (isCharging) {
+                    Icon(
+                        imageVector = Icons.Default.FlashOn,
+                        contentDescription = "Cargando",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+
+            // Percentage and info
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "$level%",
+                    color = if (isCharging) Color(0xFF99CC00) else Color(0xFF33B5E5),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.SansSerif
+                )
+                Text(
+                    text = if (isCharging) "CARGANDO" else "BATERÍA",
+                    color = Color.Gray,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
 // 3. Classic Jelly Bean Desktop Launcher with Icons and Search Box
 @Composable
 fun JellyBeanDesktop(viewModel: JellyBeanViewModel) {
     val isFolderOpen by viewModel.isGoogleFolderOpen.collectAsState()
     val isClockActive by viewModel.isAnalogClockWidgetActive.collectAsState()
     val widgetOffset by viewModel.analogClockWidgetOffset.collectAsState()
+    val isBatteryWidgetActive by viewModel.isBatteryWidgetActive.collectAsState()
+    val batteryWidgetOffset by viewModel.batteryWidgetOffset.collectAsState()
+    val batteryLevel by viewModel.batteryLevel.collectAsState()
+    val isBatteryCharging by viewModel.isBatteryCharging.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isClockActive) {
@@ -2428,6 +2750,38 @@ fun JellyBeanDesktop(viewModel: JellyBeanViewModel) {
                 contentAlignment = Alignment.Center
             ) {
                 JellyBeanAnalogClock(modifier = Modifier.fillMaxSize())
+            }
+        }
+
+        if (isBatteryWidgetActive) {
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            batteryWidgetOffset.x.toInt(),
+                            batteryWidgetOffset.y.toInt()
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            viewModel.setBatteryWidgetOffset(
+                                androidx.compose.ui.geometry.Offset(
+                                    batteryWidgetOffset.x + dragAmount.x,
+                                    batteryWidgetOffset.y + dragAmount.y
+                                )
+                            )
+                        }
+                    }
+                    .background(Color.Transparent)
+            ) {
+                JellyBeanBatteryWidget(
+                    level = batteryLevel,
+                    isCharging = isBatteryCharging,
+                    onClick = {
+                        viewModel.launchApp(AppType.SETTINGS)
+                    }
+                )
             }
         }
 
@@ -2833,6 +3187,9 @@ fun JellyBeanAppDrawer(viewModel: JellyBeanViewModel) {
                 )
 
                 val isClockActive by viewModel.isAnalogClockWidgetActive.collectAsState()
+                val isBatteryActive by viewModel.isBatteryWidgetActive.collectAsState()
+                val batteryLevel by viewModel.batteryLevel.collectAsState()
+                val isBatteryCharging by viewModel.isBatteryCharging.collectAsState()
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2964,6 +3321,111 @@ fun JellyBeanAppDrawer(viewModel: JellyBeanViewModel) {
                             }
                         }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(160.dp)
+                            .clickable {
+                                val nextState = !isBatteryActive
+                                viewModel.setBatteryWidgetActive(nextState)
+                                viewModel.playSystemSound("tick")
+                                if (nextState) {
+                                    viewModel.postNotification(
+                                        "Ajustes de Inicio",
+                                        "Widget de batería añadido al escritorio",
+                                        AppType.SETTINGS
+                                    )
+                                } else {
+                                    viewModel.postNotification(
+                                        "Ajustes de Inicio",
+                                        "Widget de batería quitado del escritorio",
+                                        AppType.SETTINGS
+                                    )
+                                }
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isBatteryActive) Color(0x2233B5E5) else Color(0xFF161616)
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isBatteryActive) Color(0xFF33B5E5) else Color(0xFF333333)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Mini Battery preview
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(28.dp)
+                                        .height(50.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Canvas(modifier = Modifier.fillMaxSize()) {
+                                        val w = size.width
+                                        val h = size.height
+                                        val tipHeight = 4.dp.toPx()
+                                        val tipWidth = w * 0.4f
+                                        drawRect(
+                                            color = Color(0xFFCCCCCC),
+                                            topLeft = Offset((w - tipWidth) / 2f, 0f),
+                                            size = Size(tipWidth, tipHeight)
+                                        )
+                                        drawRect(
+                                            color = Color(0xFFCCCCCC),
+                                            topLeft = Offset(0f, tipHeight),
+                                            size = Size(w, h - tipHeight),
+                                            style = Stroke(width = 1.5.dp.toPx())
+                                        )
+                                        val fillMaxH = h - tipHeight - 4.dp.toPx()
+                                        val fillH = fillMaxH * (batteryLevel / 100f)
+                                        val fillW = w - 4.dp.toPx()
+                                        drawRect(
+                                            color = if (isBatteryCharging) Color(0xFF99CC00) else Color(0xFF33B5E5),
+                                            topLeft = Offset(2.dp.toPx(), tipHeight + 2.dp.toPx() + (fillMaxH - fillH)),
+                                            size = Size(fillW, fillH)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "Control de Batería",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (isBatteryActive) "ACTIVO (Toca para quitar)" else "INACTIVO (Toca para añadir)",
+                                    color = if (isBatteryActive) Color(0xFF33B5E5) else Color.Gray,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
+                    Box(modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -3204,6 +3666,8 @@ fun QuickSettingsGrid(
     modifier: Modifier = Modifier
 ) {
     var showBrightnessDialog by remember { mutableStateOf(false) }
+    val batteryLevel by viewModel.batteryLevel.collectAsState()
+    val isBatteryCharging by viewModel.isBatteryCharging.collectAsState()
 
     if (showBrightnessDialog) {
         AlertDialog(
@@ -3336,13 +3800,13 @@ fun QuickSettingsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             QuickSettingsTile(
-                icon = Icons.Default.BatteryChargingFull,
+                icon = if (isBatteryCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
                 title = "Batería",
-                status = "78% (Carga)",
+                status = "$batteryLevel%${if (isBatteryCharging) " (Cargando)" else ""}",
                 active = true,
-                activeColor = Color(0xFF66BB6A),
+                activeColor = if (isBatteryCharging) Color(0xFF99CC00) else Color(0xFF33B5E5),
                 modifier = Modifier.weight(1f),
-                onClick = {}
+                onClick = { viewModel.toggleBatteryCharging() }
             )
             QuickSettingsTile(
                 icon = Icons.Default.AirplanemodeActive,
@@ -3709,6 +4173,8 @@ fun JellyBeanAppWindow(app: AppType, viewModel: JellyBeanViewModel) {
                     AppType.AI_GENERATOR -> AIGeneratorActivity(viewModel)
                     AppType.SOUND_RECORDER -> SoundRecorderActivity(viewModel)
                     AppType.DOWNLOADS -> DownloadsActivity(viewModel)
+                    AppType.NOTES -> NotesActivity(viewModel)
+                    AppType.RADIO -> RadioActivity(viewModel)
                 }
             }
         }
@@ -4014,6 +4480,146 @@ fun PeopleActivity(viewModel: JellyBeanViewModel) {
 
 @Composable
 fun BrowserActivity(viewModel: JellyBeanViewModel) {
+    var urlInput by remember { mutableStateOf("https://www.wikipedia.org") }
+    var webViewInstance by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    var canGoBack by remember { mutableStateOf(false) }
+    var canGoForward by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF151515))) {
+        // Top browser URL bar (replicating 2012 Holo styled top bar)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF151515))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Back/Forward Navigation
+            IconButton(
+                onClick = {
+                    webViewInstance?.goBack()
+                },
+                enabled = canGoBack,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChevronLeft,
+                    contentDescription = "Back",
+                    tint = if (canGoBack) Color(0xFF33B5E5) else Color.DarkGray,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    webViewInstance?.goForward()
+                },
+                enabled = canGoForward,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Forward",
+                    tint = if (canGoForward) Color(0xFF33B5E5) else Color.DarkGray,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // URL input field
+            BasicTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it },
+                textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+                cursorBrush = SolidColor(Color(0xFF33B5E5)),
+                modifier = Modifier
+                    .weight(1f)
+                    .background(Color(0xFF2B2B2B), RoundedCornerShape(2.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                decorationBox = { innerTextField ->
+                    innerTextField()
+                }
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Ir / Go button (Arrow icon)
+            IconButton(
+                onClick = {
+                    val target = urlInput.trim()
+                    if (target.isNotEmpty()) {
+                        val formattedUrl = if (target.startsWith("http://") || target.startsWith("https://")) {
+                            target
+                        } else if (target.contains(".") && !target.contains(" ")) {
+                            "https://$target"
+                        } else {
+                            "https://www.google.com/search?q=${java.net.URLEncoder.encode(target, "UTF-8")}"
+                        }
+                        urlInput = formattedUrl
+                        webViewInstance?.loadUrl(formattedUrl)
+                    }
+                },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowForward,
+                    contentDescription = "Go",
+                    tint = Color(0xFF33B5E5),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    webViewInstance?.reload()
+                },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Refresh",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        // Real WebView View
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { context ->
+                android.webkit.WebView(context).apply {
+                    webViewClient = object : android.webkit.WebViewClient() {
+                        override fun onPageStarted(view: android.webkit.WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, url, favicon)
+                            url?.let { urlInput = it }
+                            canGoBack = view?.canGoBack() ?: false
+                            canGoForward = view?.canGoForward() ?: false
+                        }
+
+                        override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            url?.let { urlInput = it }
+                            canGoBack = view?.canGoBack() ?: false
+                            canGoForward = view?.canGoForward() ?: false
+                        }
+                    }
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    loadUrl(urlInput)
+                    webViewInstance = this
+                }
+            },
+            update = { webView ->
+                webViewInstance = webView
+            },
+            modifier = Modifier.fillMaxSize().weight(1f)
+        )
+    }
+}
+
+@Composable
+fun OldBrowserActivity(viewModel: JellyBeanViewModel) {
     val query by viewModel.searchQuery.collectAsState()
     val loading by viewModel.searchLoading.collectAsState()
     val resultText by viewModel.searchResultText.collectAsState()
@@ -4514,6 +5120,40 @@ fun AISpecialCameraActivity(viewModel: JellyBeanViewModel) {
     val errorMsg by viewModel.cameraError.collectAsState()
     val rollHistory by viewModel.galleryImages.collectAsState()
 
+    var showCameraPermissionDialog by remember { mutableStateOf(false) }
+    var cameraPermissionGranted by remember { mutableStateOf(false) }
+
+    if (showCameraPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showCameraPermissionDialog = false },
+            title = { Text("Permiso de Cámara", color = Color(0xFF33B5E5)) },
+            text = { Text("La aplicación de cámara requiere acceso al hardware de la cámara del teléfono para capturar y revelar imágenes.", color = Color.LightGray) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        cameraPermissionGranted = true
+                        showCameraPermissionDialog = false
+                        viewModel.postNotification("Cámara", "Permiso de cámara concedido", AppType.CAMERA)
+                        viewModel.generateCameraPhoto()
+                    }
+                ) {
+                    Text("PERMITIR", color = Color(0xFF33B5E5), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showCameraPermissionDialog = false
+                        viewModel.postNotification("Cámara", "Permiso de cámara denegado", AppType.CAMERA)
+                    }
+                ) {
+                    Text("DENEGAR", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF1E1E22)
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -4604,7 +5244,13 @@ fun AISpecialCameraActivity(viewModel: JellyBeanViewModel) {
             Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(
-                onClick = { viewModel.generateCameraPhoto() },
+                onClick = {
+                    if (!cameraPermissionGranted) {
+                        showCameraPermissionDialog = true
+                    } else {
+                        viewModel.generateCameraPhoto()
+                    }
+                },
                 enabled = !loading,
                 modifier = Modifier
                     .size(54.dp)
@@ -5049,55 +5695,504 @@ fun GalleryActivity(viewModel: JellyBeanViewModel) {
 
 @Composable
 fun CalculatorActivity(viewModel: JellyBeanViewModel) {
-    val scoreText by viewModel.calcDisplay.collectAsState()
+    val displayVal by viewModel.calcDisplay.collectAsState()
+    var formulaHistory by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(14.dp),
+            .background(Color(0xFF1C1C1F))
+            .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Box(
+        // Authentic dual-line calculator screen
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(80.dp)
-                .background(Color(0xFF0F0F0F), RoundedCornerShape(4.dp))
-                .border(1.dp, Color(0x3333B5E5), RoundedCornerShape(4.dp))
-                .padding(12.dp),
-            contentAlignment = Alignment.CenterEnd
+                .background(Color(0xFF0F0F12), RoundedCornerShape(4.dp))
+                .border(1.5.dp, Color(0xFF33B5E5).copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                .padding(16.dp),
+            horizontalAlignment = Alignment.End
         ) {
-            Text(text = scoreText, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text(
+                text = formulaHistory.ifEmpty { " " },
+                color = Color.Gray,
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = displayVal,
+                color = Color.White,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1
+            )
         }
 
-        val matrix = listOf(
-            listOf("7", "8", "9", "÷"),
-            listOf("4", "5", "6", "×"),
-            listOf("1", "2", "3", "-"),
-            listOf("C", "0", "=", "+")
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Holo Scientific Function panel row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf("sin", "cos", "tan", "ln").forEach { func ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .background(Color(0xFF102835), RoundedCornerShape(2.dp))
+                        .border(0.5.dp, Color(0xFF33B5E5).copy(alpha = 0.5f), RoundedCornerShape(2.dp))
+                        .clickable {
+                            if (displayVal == "0") {
+                                viewModel.handleCalcKey(func)
+                            } else {
+                                formulaHistory = "$func($displayVal)"
+                                viewModel.handleCalcKey(func)
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = func, color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Standard Keyboard Layout
+        val keyboard = listOf(
+            listOf("7", "8", "9", "÷", "DEL"),
+            listOf("4", "5", "6", "×", "("),
+            listOf("1", "2", "3", "-", ")"),
+            listOf("C", "0", ".", "+", "=")
         )
 
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            matrix.forEach { entries ->
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            keyboard.forEach { row ->
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    entries.forEach { cell ->
-                        val isOperator = cell in listOf("÷", "×", "-", "+", "=")
-                        val btnBg = if (cell == "C") Color(0x33FF3300) else if (isOperator) Color(0xFF222830) else Color(0x22FFFFFF)
-                        val btnBorderColor = if (isOperator) Color(0xFF33B5E5) else Color(0x33FFFFFF)
+                    row.forEach { cell ->
+                        val isOp = cell in listOf("÷", "×", "-", "+", "=")
+                        val isSpecial = cell in listOf("C", "DEL", "(", ")")
+                        
+                        val btnBg = when {
+                            cell == "=" -> Color(0xFF33B5E5)
+                            isOp -> Color(0xFF222830)
+                            isSpecial -> Color(0xFF2B2B2B)
+                            else -> Color(0xFF3B3B3E)
+                        }
+                        
+                        val btnTint = when {
+                            cell == "=" -> Color.Black
+                            isOp -> Color(0xFF33B5E5)
+                            isSpecial -> Color(0xFFFF9426)
+                            else -> Color.White
+                        }
 
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .aspectRatio(1.2f)
-                                .background(btnBg, RoundedCornerShape(4.dp))
-                                .border(1.dp, btnBorderColor, RoundedCornerShape(4.dp))
-                                .clickable { viewModel.handleCalcKey(cell) },
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(btnBg)
+                                .border(1.dp, if (isOp) Color(0xFF33B5E5).copy(alpha = 0.3f) else Color.Transparent, RoundedCornerShape(4.dp))
+                                .clickable {
+                                    if (cell == "C") {
+                                        formulaHistory = ""
+                                        viewModel.handleCalcKey("C")
+                                    } else if (cell == "=") {
+                                        formulaHistory = displayVal
+                                        viewModel.handleCalcKey("=")
+                                    } else {
+                                        viewModel.handleCalcKey(cell)
+                                    }
+                                },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(text = cell, color = if (isOperator) Color(0xFF33B5E5) else Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = cell,
+                                color = btnTint,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.SansSerif
+                            )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NotesActivity(viewModel: JellyBeanViewModel) {
+    val notesList by viewModel.notes.collectAsState()
+    var selectedNote by remember { mutableStateOf<NoteItem?>(null) }
+    var isEditing by remember { mutableStateOf(false) }
+    var editTitle by remember { mutableStateOf("") }
+    var editContent by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+            .padding(14.dp)
+    ) {
+        if (selectedNote == null && !isEditing) {
+            // Notes list view
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "MIS NOTAS HOLO",
+                    color = Color(0xFF33B5E5),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                Button(
+                    onClick = {
+                        selectedNote = null
+                        editTitle = ""
+                        editContent = ""
+                        isEditing = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF102835)),
+                    border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                    shape = RoundedCornerShape(2.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add note", tint = Color(0xFF33B5E5), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("AÑADIR", color = Color(0xFF33B5E5), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            if (notesList.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("No hay notas guardadas", color = Color.Gray, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(notesList) { note ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedNote = note
+                                    editTitle = note.title
+                                    editContent = note.content
+                                    isEditing = true
+                                },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                            shape = RoundedCornerShape(2.dp),
+                            border = BorderStroke(1.dp, Color(0xFF333333))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .drawBehind {
+                                        // Left neon vertical strip
+                                        drawRect(
+                                            color = Color(0xFF33B5E5),
+                                            topLeft = Offset.Zero,
+                                            size = Size(4.dp.toPx(), size.height)
+                                        )
+                                    }
+                                    .padding(start = 14.dp, top = 12.dp, end = 12.dp, bottom = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = note.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = note.content,
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(text = note.date, color = Color.Gray, fontSize = 10.sp)
+                                }
+                                IconButton(onClick = { viewModel.deleteNote(note.id) }) {
+                                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFFF4444).copy(alpha = 0.8f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Edit/Create Note Editor
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (selectedNote == null) "NUEVA NOTA" else "EDITAR NOTA",
+                    color = Color(0xFFFF9426),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = {
+                            selectedNote = null
+                            isEditing = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222)),
+                        shape = RoundedCornerShape(2.dp)
+                    ) {
+                        Text("CANCELAR", color = Color.White, fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = {
+                            val title = editTitle.ifBlank { "Sin título" }
+                            val content = editContent.ifBlank { "" }
+                            if (selectedNote == null) {
+                                viewModel.addNote(title, content)
+                            } else {
+                                viewModel.updateNote(selectedNote!!.id, title, content)
+                            }
+                            selectedNote = null
+                            isEditing = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF102835)),
+                        border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                        shape = RoundedCornerShape(2.dp)
+                    ) {
+                        Text("GUARDAR", color = Color(0xFF33B5E5), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = editTitle,
+                onValueChange = { editTitle = it },
+                label = { Text("Título de la nota", color = Color.Gray) },
+                textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF33B5E5),
+                    unfocusedBorderColor = Color(0xFF333333),
+                    focusedLabelColor = Color(0xFF33B5E5)
+                ),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+            )
+
+            OutlinedTextField(
+                value = editContent,
+                onValueChange = { editContent = it },
+                label = { Text("Contenido...", color = Color.Gray) },
+                textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF33B5E5),
+                    unfocusedBorderColor = Color(0xFF333333),
+                    focusedLabelColor = Color(0xFF33B5E5)
+                ),
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+fun RadioActivity(viewModel: JellyBeanViewModel) {
+    var frequency by remember { mutableStateOf(105.5f) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var signalStrength by remember { mutableStateOf(4) }
+    val presets = listOf(88.3f, 91.5f, 95.5f, 98.1f, 102.3f, 105.5f)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF151515))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // App header banner
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(imageVector = Icons.Default.Radio, contentDescription = "Radio icon", tint = Color(0xFF33B5E5), modifier = Modifier.size(28.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text("RADIO FM HOLO", color = Color(0xFF33B5E5), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Simulador de ondas analógicas", color = Color.Gray, fontSize = 11.sp)
+            }
+        }
+
+        // FM tuning station display card
+        Card(
+            modifier = Modifier.fillMaxWidth().height(140.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF222222)),
+            border = BorderStroke(1.dp, Color(0xFF444444))
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = if (isPlaying) "REPRODUCIENDO" else "RADIO APAGADA",
+                        color = if (isPlaying) Color(0xFF99CC00) else Color.Gray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = String.format(java.util.Locale.US, "%.1f", frequency),
+                        color = if (isPlaying) Color(0xFF33B5E5) else Color.Gray.copy(alpha = 0.6f),
+                        fontSize = 46.sp,
+                        fontWeight = FontWeight.Light,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "MHz",
+                        color = Color.Gray,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // Signal bars
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        for (i in 1..5) {
+                            val active = isPlaying && i <= signalStrength
+                            Box(
+                                modifier = Modifier
+                                    .width(5.dp)
+                                    .height((i * 4).dp)
+                                    .background(if (active) Color(0xFF33B5E5) else Color.DarkGray)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Interactive Tuner slider
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("87.5 MHz", color = Color.Gray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                Text("Búsqueda Manual", color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("108.0 MHz", color = Color.Gray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            }
+            Slider(
+                value = frequency,
+                onValueChange = {
+                    frequency = Math.round(it * 10f) / 10f
+                    if (!isPlaying) isPlaying = true
+                    signalStrength = (2..5).random()
+                },
+                valueRange = 87.5f..108.0f,
+                colors = SliderDefaults.colors(
+                    activeTrackColor = Color(0xFF33B5E5),
+                    inactiveTrackColor = Color(0xFF333333),
+                    thumbColor = Color(0xFF33B5E5)
+                )
+            )
+        }
+
+        // Radio control buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                modifier = Modifier.size(48.dp),
+                onClick = {
+                    if (frequency > 87.5f) {
+                        frequency = Math.round((frequency - 0.1f) * 10f) / 10f
+                        signalStrength = (2..5).random()
+                    }
+                }
+            ) {
+                Icon(imageVector = Icons.Default.ChevronLeft, contentDescription = "Tuning left", tint = Color.White, modifier = Modifier.size(32.dp))
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .background(if (isPlaying) Color(0xFF33B5E5) else Color(0xFF2E2E2E), CircleShape)
+                    .clickable {
+                        isPlaying = !isPlaying
+                        if (isPlaying) {
+                            viewModel.postNotification("Radio FM", "Sintonizando ${String.format(java.util.Locale.US, "%.1f", frequency)} MHz", AppType.RADIO)
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PowerSettingsNew,
+                    contentDescription = "Power",
+                    tint = if (isPlaying) Color.Black else Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            IconButton(
+                modifier = Modifier.size(48.dp),
+                onClick = {
+                    if (frequency < 108.0f) {
+                        frequency = Math.round((frequency + 0.1f) * 10f) / 10f
+                        signalStrength = (2..5).random()
+                    }
+                }
+            ) {
+                Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Tuning right", tint = Color.White, modifier = Modifier.size(32.dp))
+            }
+        }
+
+        // Favoritos / Presets grid
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text("MIS ESTACIONES FAVORITAS", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                presets.take(4).forEach { station ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .background(Color(0xFF222222), RoundedCornerShape(2.dp))
+                            .border(1.dp, if (frequency == station && isPlaying) Color(0xFF33B5E5) else Color(0xFF444444), RoundedCornerShape(2.dp))
+                            .clickable {
+                                frequency = station
+                                isPlaying = true
+                                signalStrength = (4..5).random()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${station}",
+                            color = if (frequency == station && isPlaying) Color(0xFF33B5E5) else Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }
@@ -5578,6 +6673,8 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
         nicknameInput = initialOwnerName
     }
     val systemBrightness by viewModel.systemBrightness.collectAsState()
+    val simulatedBatteryLevel by viewModel.batteryLevel.collectAsState()
+    val simulatedBatteryCharging by viewModel.isBatteryCharging.collectAsState()
     var powerSaverEnabled by remember { mutableStateOf(false) }
     var aboutClickCount by remember { mutableIntStateOf(0) }
     var showResetDialog by remember { mutableStateOf(false) }
@@ -5949,7 +7046,7 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                         // Notification Sound selector dropdown
                         val selectedNotifSound by viewModel.selectedNotificationSound.collectAsState()
                         var notifMenuExpanded by remember { mutableStateOf(false) }
-                        val notifSoundList = listOf("Simple Tick", "Jelly Bean Ack", "Double Beep", "Bubble Pop")
+                        val notifSoundList = listOf("Simple Tick", "Jelly Bean Ack", "Double Beep", "Bubble Pop", "Ceres (Classic)", "Pixie Dust", "Teardrop")
 
                         Column(modifier = Modifier.fillMaxWidth()) {
                             Text("Tono de notificación de sistema", color = Color.White, fontSize = 14.sp)
@@ -6652,7 +7749,8 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(16.dp),
+                            .padding(16.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Spacer(modifier = Modifier.height(16.dp))
@@ -6670,20 +7768,25 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                                     style = Stroke(width = 6.dp.toPx())
                                 )
                                 drawArc(
-                                    color = if (powerSaverEnabled) Color(0xFFFF9426) else Color(0xFF669900),
+                                    color = if (simulatedBatteryCharging) Color(0xFF99CC00) else if (powerSaverEnabled) Color(0xFFFF9426) else Color(0xFF33B5E5),
                                     startAngle = -90f,
-                                    sweepAngle = 360f * 0.78f,
+                                    sweepAngle = 360f * (simulatedBatteryLevel / 100f),
                                     useCenter = false,
                                     style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
                                 )
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("78%", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Bold)
-                                Text("ESTABLE", color = if (powerSaverEnabled) Color(0xFFFF9426) else Color(0xFF669900), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("$simulatedBatteryLevel%", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (simulatedBatteryCharging) "CARGANDO" else if (powerSaverEnabled) "AHORRO ENERGÍA" else "ESTABLE",
+                                    color = if (simulatedBatteryCharging) Color(0xFF99CC00) else if (powerSaverEnabled) Color(0xFFFF9426) else Color(0xFF33B5E5),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(28.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
 
                         Card(
                             colors = CardDefaults.cardColors(containerColor = Color(0xFF0C0C0E)),
@@ -6692,14 +7795,73 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text("INFORMACIÓN FÍSICA Y DE SALUD", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
-                                RowInfoLabel("Estado de carga:", "Descargándose (Simulada)")
+                                RowInfoLabel("Estado de carga:", if (simulatedBatteryCharging) "Conectado / Cargándose" else "Desconectado / Descargándose")
                                 RowInfoLabel("Salud de Batería:", "Excelente / Estable")
-                                RowInfoLabel("Voltaje:", "3.84 V")
-                                RowInfoLabel("Temperatura:", "31.2 °C")
+                                RowInfoLabel("Voltaje:", "${3.7f + (simulatedBatteryLevel / 100f) * 0.5f} V")
+                                RowInfoLabel("Temperatura:", if (simulatedBatteryCharging) "34.5 °C" else "30.1 °C")
                             }
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
+
+                        // Controls
+                        Text("SIMULACIÓN TÁCTIL DE ENERGÍA", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                        
+                        // 1. Level Slider
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF0C0C0E), RoundedCornerShape(4.dp))
+                                .border(1.dp, Color(0xFF2E2E32), RoundedCornerShape(4.dp))
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Nivel de batería simulado", color = Color.White, fontSize = 14.sp)
+                                Text("$simulatedBatteryLevel%", color = Color(0xFF33B5E5), fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Slider(
+                                value = simulatedBatteryLevel.toFloat(),
+                                onValueChange = { viewModel.setBatteryLevel(it.toInt()) },
+                                valueRange = 0f..100f,
+                                colors = SliderDefaults.colors(
+                                    activeTrackColor = Color(0xFF33B5E5),
+                                    thumbColor = Color(0xFF33B5E5),
+                                    inactiveTrackColor = Color.DarkGray
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // 2. Plug in Switch
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF0C0C0E), RoundedCornerShape(4.dp))
+                                .border(1.dp, Color(0xFF2E2E32), RoundedCornerShape(4.dp))
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Simular Conexión (Cargador)", color = Color.White, fontSize = 15.sp)
+                                Text(if (simulatedBatteryCharging) "Conectado a la corriente" else "Desconectado", color = Color.Gray, fontSize = 11.sp)
+                            }
+                            Switch(
+                                checked = simulatedBatteryCharging,
+                                onCheckedChange = { viewModel.setBatteryCharging(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF99CC00),
+                                    checkedTrackColor = Color(0xFF99CC00).copy(alpha = 0.5f)
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         Row(
                             modifier = Modifier
@@ -6967,7 +8129,7 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                 TextButton(
                     onClick = {
                         showResetDialog = false
-                        viewModel.postNotification("Sistema", "Simulando restablecimiento de fábrica...", AppType.SETTINGS)
+                        viewModel.resetSimulator()
                     }
                 ) {
                     Text("CONFIRMAR Y RESETEAR", color = Color.Red)
@@ -9713,6 +10875,62 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 }
             }
         }
+        AppType.NOTES -> {
+            Box(
+                modifier = modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFFFFEA70))
+                    .border(1.5.dp, Color(0xFFE5C100), RoundedCornerShape(4.dp))
+                    .padding(5.dp)
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.SpaceEvenly,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Top red binder strip
+                    Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color(0xFFFF4444)))
+                    // Notepad horizontal ruling lines
+                    Box(modifier = Modifier.fillMaxWidth().height(1.5.dp).background(Color(0x33000000)))
+                    Box(modifier = Modifier.fillMaxWidth().height(1.5.dp).background(Color(0x33000000)))
+                    Box(modifier = Modifier.fillMaxWidth().height(1.5.dp).background(Color(0x33000000)))
+                }
+            }
+        }
+        AppType.RADIO -> {
+            Box(
+                modifier = modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF333333))
+                    .border(2.dp, Color(0xFF555555), RoundedCornerShape(6.dp))
+                    .padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceEvenly,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Radio speaker grille slots
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        repeat(4) {
+                            Box(modifier = Modifier.width(3.dp).height(12.dp).background(Color.Black))
+                        }
+                    }
+                    // Tuning frequency bar
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(6.dp).background(Color.Black),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Box(modifier = Modifier.fillMaxHeight().width(2.dp).background(Color(0xFF33B5E5)))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -9942,6 +11160,40 @@ fun SoundRecorderActivity(viewModel: JellyBeanViewModel) {
     val duration by viewModel.recorderDuration.collectAsState()
     val hasRecording by viewModel.recorderHasRecording.collectAsState()
     val visualizerHeights by viewModel.recorderVisualizerHeights.collectAsState()
+
+    var showMicPermissionDialog by remember { mutableStateOf(false) }
+    var micPermissionGranted by remember { mutableStateOf(false) }
+
+    if (showMicPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showMicPermissionDialog = false },
+            title = { Text("Permiso de Micrófono", color = Color(0xFF33B5E5)) },
+            text = { Text("La grabadora de voz requiere acceso al micrófono del teléfono para grabar tus audios y guardarlos en cinta.", color = Color.LightGray) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        micPermissionGranted = true
+                        showMicPermissionDialog = false
+                        viewModel.postNotification("Grabadora", "Permiso de micrófono concedido", AppType.SOUND_RECORDER)
+                        viewModel.startRecording()
+                    }
+                ) {
+                    Text("PERMITIR", color = Color(0xFF33B5E5), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showMicPermissionDialog = false
+                        viewModel.postNotification("Grabadora", "Permiso de micrófono denegado", AppType.SOUND_RECORDER)
+                    }
+                ) {
+                    Text("DENEGAR", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF1E1E22)
+        )
+    }
 
     // Rotación de carretes de cinta para la animación de cassette
     val infiniteTransition = rememberInfiniteTransition()
@@ -10190,7 +11442,13 @@ fun SoundRecorderActivity(viewModel: JellyBeanViewModel) {
 
             // GRABAR button (Big red circle)
             Button(
-                onClick = { viewModel.startRecording() },
+                onClick = {
+                    if (!micPermissionGranted) {
+                        showMicPermissionDialog = true
+                    } else {
+                        viewModel.startRecording()
+                    }
+                },
                 enabled = state == "IDLE",
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF3A1212),

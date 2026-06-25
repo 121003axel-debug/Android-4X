@@ -524,7 +524,8 @@ fun RetroMusicActivity(viewModel: JellyBeanViewModel) {
     val isPlaying by viewModel.isMusicPlaying.collectAsState()
     val progressSec by viewModel.musicProgressSec.collectAsState()
 
-    val currentTrack = viewModel.musicTracks[currentTrackIndex]
+    val musicTracksList by viewModel.musicTracksState.collectAsState()
+    val currentTrack = musicTracksList.getOrElse(currentTrackIndex) { musicTracksList[0] }
     val totalProgressFraction = progressSec.toFloat() / currentTrack.durationSec
 
     // Rotating vinyl animation
@@ -538,6 +539,42 @@ fun RetroMusicActivity(viewModel: JellyBeanViewModel) {
         )
     )
 
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    var userImportedTracksCount by remember { mutableStateOf(0) }
+
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            title = { Text("Permiso de Almacenamiento", color = Color(0xFF33B5E5)) },
+            text = { Text("Play Music necesita acceso a tus archivos multimedia para escanear e importar archivos .mp3 locales.", color = Color.LightGray) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPermissionDialog = false
+                        // Simulate selecting/importing a retro song!
+                        val possibleTracks = listOf(
+                            Pair("Instant Crush", "Daft Punk ft. Julian Casablancas"),
+                            Pair("Get Lucky", "Daft Punk ft. Pharrell Williams"),
+                            Pair("Lose Yourself to Dance", "Daft Punk"),
+                            Pair("Starboy", "The Weeknd ft. Daft Punk")
+                        )
+                        val chosen = possibleTracks.getOrElse(userImportedTracksCount % possibleTracks.size) { possibleTracks[0] }
+                        userImportedTracksCount++
+                        viewModel.addMusicTrack(chosen.first, chosen.second, 260)
+                    }
+                ) {
+                    Text("PERMITIR", color = Color(0xFF33B5E5), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    Text("DENEGAR", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF1E1E22)
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -546,6 +583,25 @@ fun RetroMusicActivity(viewModel: JellyBeanViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        // Top row with import option
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("PLAY MUSIC", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Button(
+                onClick = { showPermissionDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF111111)),
+                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                shape = RoundedCornerShape(2.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.height(28.dp)
+            ) {
+                Text("IMPORTAR", color = Color(0xFF33B5E5), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
         // Track visual and rotation
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
