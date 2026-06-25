@@ -10,6 +10,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.asImageBitmap
@@ -46,7 +49,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
+import android.app.Application
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.provider.MediaStore
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -63,6 +84,41 @@ import retrofit2.http.Query
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.random.Random
+
+// Holo Blue Glow Tap Effect modifier for custom vintage UI feel
+@Composable
+fun Modifier.holoTap(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(2.dp)
+): Modifier {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val glowAlpha by animateFloatAsState(
+        targetValue = if (isPressed) 0.5f else 0.0f,
+        animationSpec = if (isPressed) tween(60) else tween(220)
+    )
+    
+    return this
+        .clip(shape)
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick
+        )
+        .drawBehind {
+            if (glowAlpha > 0f) {
+                drawRect(
+                    color = Color(0xFF33B5E5).copy(alpha = glowAlpha * 0.4f)
+                )
+                drawRect(
+                    color = Color(0xFF33B5E5).copy(alpha = glowAlpha * 0.8f),
+                    style = Stroke(width = 2.dp.toPx())
+                )
+            }
+        }
+}
 
 // ==========================================
 // RETROFIT & MOSHI SCHEMAS (GEMINI API)
@@ -174,7 +230,12 @@ enum class AppType(val appName: String) {
     CLOCK("Reloj"),
     MUSIC("Música"),
     CALENDAR("Calendario"),
-    ABOUT("About JB")
+    ABOUT("About JB"),
+    FILE_MANAGER("Archivos"),
+    THEMES("Temas"),
+    AI_GENERATOR("Creador IA"),
+    SOUND_RECORDER("Grabadora"),
+    DOWNLOADS("Descargas")
 }
 
 data class ChatMessage(
@@ -189,6 +250,13 @@ data class AppNotification(
     val sender: String,
     val message: String,
     val appType: AppType
+)
+
+data class DownloadItem(
+    val name: String,
+    val size: String,
+    val status: String,
+    val progress: Int
 )
 
 data class JellyBean(
@@ -247,6 +315,21 @@ class JellyBeanViewModel : ViewModel() {
     private val _wallpaperSelected = MutableStateFlow<Bitmap?>(null)
     val wallpaperSelected = _wallpaperSelected.asStateFlow()
 
+    private val _themeColorProfile = MutableStateFlow("BLUE") // BLUE, PURPLE, GREEN, RED, AMBER
+    val themeColorProfile = _themeColorProfile.asStateFlow()
+
+    fun setThemeColorProfile(profile: String) {
+        _themeColorProfile.value = profile
+    }
+
+    private val _wallpaperPreset = MutableStateFlow("WAVES") // WAVES, SOLID, GRADIENT, NEXUS
+    val wallpaperPreset = _wallpaperPreset.asStateFlow()
+
+    fun setWallpaperPreset(preset: String) {
+        _wallpaperSelected.value = null
+        _wallpaperPreset.value = preset
+    }
+
     // Google Folder Popup
     private val _isGoogleFolderOpen = MutableStateFlow(false)
     val isGoogleFolderOpen = _isGoogleFolderOpen.asStateFlow()
@@ -266,6 +349,281 @@ class JellyBeanViewModel : ViewModel() {
 
     private val _ownerName = MutableStateFlow("Administrador Jelly Bean")
     val ownerName = _ownerName.asStateFlow()
+
+    // Sound and Dark Theme Settings
+    private val _systemSoundsEnabled = MutableStateFlow(true)
+    val systemSoundsEnabled = _systemSoundsEnabled.asStateFlow()
+
+    private val _darkModeEnabled = MutableStateFlow(false)
+    val darkModeEnabled = _darkModeEnabled.asStateFlow()
+
+    // Analog Clock Widget Draggable Settings
+    private val _isAnalogClockWidgetActive = MutableStateFlow(true)
+    val isAnalogClockWidgetActive = _isAnalogClockWidgetActive.asStateFlow()
+
+    private val _analogClockWidgetOffset = MutableStateFlow(androidx.compose.ui.geometry.Offset(0f, 0f))
+    val analogClockWidgetOffset = _analogClockWidgetOffset.asStateFlow()
+
+    // Active App Drawer Tab
+    private val _activeAppDrawerTab = MutableStateFlow("APPS")
+    val activeAppDrawerTab = _activeAppDrawerTab.asStateFlow()
+
+    // Sound Recorder Simulated States
+    private val _recorderState = MutableStateFlow("IDLE") // IDLE, RECORDING, PLAYING
+    val recorderState = _recorderState.asStateFlow()
+
+    private val _recorderDuration = MutableStateFlow(0)
+    val recorderDuration = _recorderDuration.asStateFlow()
+
+    private val _recorderHasRecording = MutableStateFlow(false)
+    val recorderHasRecording = _recorderHasRecording.asStateFlow()
+
+    private val _recorderVisualizerHeights = MutableStateFlow(List(12) { 5f })
+    val recorderVisualizerHeights = _recorderVisualizerHeights.asStateFlow()
+
+    // Ringtone and Notification Settings
+    private val _selectedRingtone = MutableStateFlow("Retro Holo Chime")
+    val selectedRingtone = _selectedRingtone.asStateFlow()
+
+    private val _selectedNotificationSound = MutableStateFlow("Simple Tick")
+    val selectedNotificationSound = _selectedNotificationSound.asStateFlow()
+
+    fun selectRingtone(ringtone: String) {
+        _selectedRingtone.value = ringtone
+        playRingtoneMelody(ringtone)
+    }
+
+    fun selectNotificationSound(sound: String) {
+        _selectedNotificationSound.value = sound
+        playNotificationMelody(sound)
+    }
+
+    fun playRingtoneMelody(ringtoneName: String) {
+        CoroutineScope(Dispatchers.Default).launch {
+            val tg = try {
+                android.media.ToneGenerator(android.media.AudioManager.STREAM_RING, 85)
+            } catch (e: Exception) {
+                null
+            } ?: return@launch
+
+            try {
+                when (ringtoneName) {
+                    "Retro Holo Chime" -> {
+                        val notes = listOf(
+                            android.media.ToneGenerator.TONE_DTMF_1,
+                            android.media.ToneGenerator.TONE_DTMF_3,
+                            android.media.ToneGenerator.TONE_DTMF_5,
+                            android.media.ToneGenerator.TONE_DTMF_7
+                        )
+                        for (note in notes) {
+                            tg.startTone(note, 80)
+                            delay(120)
+                        }
+                    }
+                    "Andrómeda" -> {
+                        val notes = listOf(
+                            android.media.ToneGenerator.TONE_DTMF_9,
+                            android.media.ToneGenerator.TONE_DTMF_C,
+                            android.media.ToneGenerator.TONE_DTMF_B,
+                            android.media.ToneGenerator.TONE_DTMF_D
+                        )
+                        for (note in notes) {
+                            tg.startTone(note, 100)
+                            delay(150)
+                        }
+                    }
+                    "Jelly Bean Ring" -> {
+                        tg.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE, 600)
+                    }
+                    "Sinfonía de 8 bits" -> {
+                        val notes = listOf(
+                            android.media.ToneGenerator.TONE_DTMF_1,
+                            android.media.ToneGenerator.TONE_DTMF_5,
+                            android.media.ToneGenerator.TONE_DTMF_3,
+                            android.media.ToneGenerator.TONE_DTMF_7,
+                            android.media.ToneGenerator.TONE_DTMF_5,
+                            android.media.ToneGenerator.TONE_DTMF_9
+                        )
+                        for (note in notes) {
+                            tg.startTone(note, 70)
+                            delay(90)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // ignore
+            } finally {
+                tg.release()
+            }
+        }
+    }
+
+    fun playNotificationMelody(soundName: String) {
+        CoroutineScope(Dispatchers.Default).launch {
+            val tg = try {
+                android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
+            } catch (e: Exception) {
+                null
+            } ?: return@launch
+
+            try {
+                when (soundName) {
+                    "Simple Tick" -> {
+                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 40)
+                    }
+                    "Jelly Bean Ack" -> {
+                        tg.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 120)
+                    }
+                    "Double Beep" -> {
+                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 50)
+                        delay(100)
+                        tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 50)
+                    }
+                    "Bubble Pop" -> {
+                        tg.startTone(android.media.ToneGenerator.TONE_DTMF_5, 60)
+                    }
+                }
+            } catch (e: Exception) {
+                // ignore
+            } finally {
+                tg.release()
+            }
+        }
+    }
+
+    // Simulated Downloads state
+    private val _downloads = MutableStateFlow(listOf(
+        DownloadItem("jellybean_wallpapers.zip", "12.4 MB", "Completado", 100),
+        DownloadItem("Android_4.1_SDK.exe", "148.2 MB", "Completado", 100),
+        DownloadItem("messaging_sound_retro.mp3", "1.2 MB", "Completado", 100),
+        DownloadItem("HoloLauncher_v1.0.apk", "4.1 MB", "Completado", 100)
+    ))
+    val downloads = _downloads.asStateFlow()
+
+    fun clearDownloads() {
+        _downloads.value = emptyList()
+        playSystemSound("click")
+    }
+
+    fun startSimulatedDownload(name: String, sizeStr: String) {
+        CoroutineScope(Dispatchers.Main).launch {
+            val newItem = DownloadItem(name, sizeStr, "Descargando", 0)
+            _downloads.value = _downloads.value + newItem
+            
+            for (progress in 0..100 step 10) {
+                delay(200)
+                _downloads.value = _downloads.value.map { item ->
+                    if (item.name == name) {
+                        item.copy(progress = progress, status = if (progress == 100) "Completado" else "Descargando $progress%")
+                    } else item
+                }
+            }
+            
+            postNotification(
+                "Descargas",
+                "Descarga completada: $name",
+                AppType.DOWNLOADS
+            )
+            playNotificationMelody(_selectedNotificationSound.value)
+        }
+    }
+
+    private var toneGenerator: android.media.ToneGenerator? = null
+
+    fun playSystemSound(soundType: String) {
+        if (!_systemSoundsEnabled.value) return
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (toneGenerator == null) {
+                    toneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_SYSTEM, 100)
+                }
+                val tg = toneGenerator ?: return@launch
+                when (soundType) {
+                    "click" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 40)
+                    "notification" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 120)
+                    "volume" -> tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 100)
+                    "multimedia" -> tg.startTone(android.media.ToneGenerator.TONE_DTMF_A, 150)
+                    "ringtone" -> tg.startTone(android.media.ToneGenerator.TONE_SUP_RINGTONE, 500)
+                }
+            } catch (e: Exception) {
+                // Audio not supported in some container formats
+            }
+        }
+    }
+
+    fun setSystemSoundsEnabled(enabled: Boolean) {
+        _systemSoundsEnabled.value = enabled
+        playSystemSound("click")
+    }
+
+    fun setDarkModeEnabled(enabled: Boolean) {
+        _darkModeEnabled.value = enabled
+        playSystemSound("click")
+    }
+
+    fun setAnalogClockWidgetActive(active: Boolean) {
+        _isAnalogClockWidgetActive.value = active
+        playSystemSound("click")
+    }
+
+    fun setAnalogClockWidgetOffset(offset: androidx.compose.ui.geometry.Offset) {
+        _analogClockWidgetOffset.value = offset
+    }
+
+    fun setActiveAppDrawerTab(tab: String) {
+        _activeAppDrawerTab.value = tab
+        playSystemSound("click")
+    }
+
+    // Recorder Actions
+    private var recorderJob: Job? = null
+    fun startRecording() {
+        if (_recorderState.value != "IDLE") return
+        _recorderState.value = "RECORDING"
+        _recorderDuration.value = 0
+        _recorderHasRecording.value = false
+        playSystemSound("click")
+        recorderJob = CoroutineScope(Dispatchers.Main).launch {
+            while (_recorderState.value == "RECORDING") {
+                delay(1000)
+                _recorderDuration.value += 1
+                // Animate visualizer
+                _recorderVisualizerHeights.value = List(12) { (10..45).random().toFloat() }
+            }
+        }
+    }
+
+    fun stopRecording() {
+        if (_recorderState.value == "RECORDING") {
+            _recorderState.value = "IDLE"
+            _recorderHasRecording.value = true
+            _recorderVisualizerHeights.value = List(12) { 5f }
+            recorderJob?.cancel()
+            playSystemSound("click")
+        } else if (_recorderState.value == "PLAYING") {
+            _recorderState.value = "IDLE"
+            _recorderVisualizerHeights.value = List(12) { 5f }
+            recorderJob?.cancel()
+            playSystemSound("click")
+        }
+    }
+
+    fun startPlaying() {
+        if (_recorderState.value != "IDLE" || !_recorderHasRecording.value) return
+        _recorderState.value = "PLAYING"
+        playSystemSound("click")
+        val maxDur = _recorderDuration.value
+        var playDur = 0
+        recorderJob = CoroutineScope(Dispatchers.Main).launch {
+            while (playDur < maxDur && _recorderState.value == "PLAYING") {
+                delay(1000)
+                playDur += 1
+                _recorderVisualizerHeights.value = List(12) { (5..35).random().toFloat() }
+            }
+            _recorderState.value = "IDLE"
+            _recorderVisualizerHeights.value = List(12) { 5f }
+        }
+    }
 
     // Simulated SMS
     private val _smsConversations = MutableStateFlow(
@@ -313,6 +671,42 @@ class JellyBeanViewModel : ViewModel() {
     private val _cameraGenerating = MutableStateFlow(false)
     val cameraGenerating = _cameraGenerating.asStateFlow()
 
+    // AI Image Generator State
+    private val _aiPrompt = MutableStateFlow("")
+    val aiPrompt = _aiPrompt.asStateFlow()
+
+    private val _aiSelectedSize = MutableStateFlow("1K") // 512px, 1K, 2K
+    val aiSelectedSize = _aiSelectedSize.asStateFlow()
+
+    private val _aiSelectedRatio = MutableStateFlow("1:1") // 1:1, 16:9, 9:16, 4:3, 3:2
+    val aiSelectedRatio = _aiSelectedRatio.asStateFlow()
+
+    private val _aiError = MutableStateFlow<String?>(null)
+    val aiError = _aiError.asStateFlow()
+
+    private val _aiGenerating = MutableStateFlow(false)
+    val aiGenerating = _aiGenerating.asStateFlow()
+
+    private val _aiResult = MutableStateFlow<Bitmap?>(null)
+    val aiResult = _aiResult.asStateFlow()
+
+    fun updateAiPrompt(p: String) {
+        _aiPrompt.value = p
+    }
+
+    fun setAiSize(s: String) {
+        _aiSelectedSize.value = s
+    }
+
+    fun setAiRatio(r: String) {
+        _aiSelectedRatio.value = r
+    }
+
+    fun clearAiResult() {
+        _aiResult.value = null
+        _aiError.value = null
+    }
+
     // Calculator state
     private val _calcDisplay = MutableStateFlow("0")
     val calcDisplay = _calcDisplay.asStateFlow()
@@ -326,7 +720,8 @@ class JellyBeanViewModel : ViewModel() {
             AppType.PHONE, AppType.PEOPLE, AppType.BROWSER, AppType.MESSAGING,
             AppType.CAMERA, AppType.GALLERY, AppType.CALCULATOR, AppType.SETTINGS,
             AppType.MAPS, AppType.MARKET, AppType.CLOCK, AppType.MUSIC,
-            AppType.CALENDAR, AppType.ABOUT
+            AppType.CALENDAR, AppType.ABOUT, AppType.FILE_MANAGER, AppType.THEMES,
+            AppType.AI_GENERATOR, AppType.SOUND_RECORDER, AppType.DOWNLOADS
         )
     )
     val installedApps = _installedApps.asStateFlow()
@@ -632,6 +1027,67 @@ class JellyBeanViewModel : ViewModel() {
         _galleryImages.value = _galleryImages.value.filter { it != bitmap }
     }
 
+    fun generateAIImage() {
+        val prompt = _aiPrompt.value
+        if (prompt.trim().isEmpty()) return
+
+        _aiGenerating.value = true
+        _aiError.value = null
+        _aiResult.value = null
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val size = _aiSelectedSize.value
+                val ratio = _aiSelectedRatio.value
+                val request = GeminiRequest(
+                    contents = listOf(
+                        GeminiContent(parts = listOf(GeminiPart(text = prompt)))
+                    ),
+                    generationConfig = GenerationConfig(
+                        imageConfig = ImageConfig(aspectRatio = ratio, imageSize = size),
+                        responseModalities = listOf("TEXT", "IMAGE")
+                    )
+                )
+                val response = RetrofitClient.apiService.generateContent(
+                    model = "gemini-3-pro-image-preview",
+                    apiKey = BuildConfig.GEMINI_API_KEY,
+                    request = request
+                )
+
+                var imageB64: String? = null
+                response.candidates?.firstOrNull()?.content?.parts?.forEach { part ->
+                    if (part.inlineData?.mimeType?.startsWith("image/") == true) {
+                        imageB64 = part.inlineData.data
+                    }
+                }
+
+                if (imageB64 != null) {
+                    val decodedBytes = Base64.decode(imageB64, Base64.DEFAULT)
+                    val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    withContext(Dispatchers.Main) {
+                        if (bitmap != null) {
+                            _aiResult.value = bitmap
+                            _galleryImages.value = _galleryImages.value + bitmap
+                        } else {
+                            _aiError.value = "Error al decodificar la imagen de IA."
+                        }
+                        _aiGenerating.value = false
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        _aiError.value = "La API no retornó una imagen en formato inlineData."
+                        _aiGenerating.value = false
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _aiError.value = "Fallo en generación: ${e.localizedMessage}"
+                    _aiGenerating.value = false
+                }
+            }
+        }
+    }
+
     fun setAsWallpaper(bitmap: Bitmap) {
         _wallpaperSelected.value = bitmap
     }
@@ -757,6 +1213,8 @@ class JellyBeanViewModel : ViewModel() {
         val nextId = (_notifications.value.maxOfOrNull { it.id } ?: 0) + 1
         val newNotif = AppNotification(nextId, sender, message, appType)
         _notifications.value = _notifications.value + newNotif
+
+        playSystemSound("notification")
 
         // Trigger the ticker
         _notificationTicker.value = newNotif
@@ -918,22 +1376,27 @@ class MainActivity : ComponentActivity() {
 // ==========================================
 // CENTRAL RETRO SIMULATOR VIEWPORT
 // ==========================================
+// ==========================================
+// CENTRAL RETRO SIMULATOR VIEWPORT
+// ==========================================
 @Composable
-fun JellyBeanSimulatorView(viewModel: JellyBeanViewModel) {
-    val isLocked by viewModel.isLocked.collectAsState()
-    val isNotificationShadeOpen by viewModel.isNotificationShadeOpen.collectAsState()
-    val activeApp by viewModel.activeApp.collectAsState()
-    val isDrawerOpen by viewModel.isDrawerOpen.collectAsState()
-    val showRecentsOverlay by viewModel.showRecentAppsOverlay.collectAsState()
-    val wallpaperBmp by viewModel.wallpaperSelected.collectAsState()
-
+fun ScreenContent(
+    viewModel: JellyBeanViewModel,
+    isLocked: Boolean,
+    isNotificationShadeOpen: Boolean,
+    activeApp: AppType?,
+    isDrawerOpen: Boolean,
+    showRecentsOverlay: Boolean,
+    wallpaperBmp: android.graphics.Bitmap?,
+    wallpaperPreset: String
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("jelly_bean_simulator")
     ) {
-        // Desktop Wallpaper (Generated or Classic Android 4.1 wave)
+        // Desktop Wallpaper (Generated, Classic Android 4.1 wave, or Solid/Gradient Preset)
         if (wallpaperBmp != null) {
             Image(
                 bitmap = wallpaperBmp!!.asImageBitmap(),
@@ -942,14 +1405,36 @@ fun JellyBeanSimulatorView(viewModel: JellyBeanViewModel) {
                 contentScale = ContentScale.Crop
             )
         } else {
-            // Retro Default Wallpaper
-            Image(
-                painter = painterResource(id = R.drawable.img_jelly_bean_wallpaper),
-                contentDescription = "Retro Jelly Bean Default Wallpaper",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                alpha = 0.9f
-            )
+            when (wallpaperPreset) {
+                "SOLID" -> {
+                    // Solid Retro deep blue/charcoal color
+                    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F1219)))
+                }
+                "SOLID_BLACK" -> {
+                    // Pure solid black wallpaper
+                    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF000000)))
+                }
+                "GRADIENT" -> {
+                    // Classic dark blue/black linear gradient
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color(0xFF0F1826), Color(0xFF000000))
+                                )
+                            )
+                    )
+                }
+                "NEXUS" -> {
+                    // Classic Nexus tile mosaic pattern
+                    NexusMosaicWallpaper(modifier = Modifier.fillMaxSize())
+                }
+                else -> { // "WAVES"
+                    val themeColorProfile by viewModel.themeColorProfile.collectAsState()
+                    JellyBeanWaveWallpaper(themeProfile = themeColorProfile, modifier = Modifier.fillMaxSize())
+                }
+            }
         }
 
         // Deep blue vignette overlay to replicate retro gloss
@@ -982,9 +1467,20 @@ fun JellyBeanSimulatorView(viewModel: JellyBeanViewModel) {
                         JellyBeanAppDrawer(viewModel)
                     }
 
-                    // Overlay App window
-                    activeApp?.let { app ->
-                        JellyBeanAppWindow(app, viewModel)
+                    // Overlay App window with zoom-in opening animations
+                    var lastActiveApp by remember { mutableStateOf<AppType?>(null) }
+                    if (activeApp != null) {
+                        lastActiveApp = activeApp
+                    }
+
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = activeApp != null,
+                        enter = scaleIn(initialScale = 0.82f, animationSpec = tween(280, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(200)),
+                        exit = scaleOut(targetScale = 0.82f, animationSpec = tween(220, easing = FastOutLinearInEasing)) + fadeOut(animationSpec = tween(150))
+                    ) {
+                        lastActiveApp?.let { app ->
+                            JellyBeanAppWindow(app, viewModel)
+                        }
                     }
                 }
 
@@ -999,8 +1495,451 @@ fun JellyBeanSimulatorView(viewModel: JellyBeanViewModel) {
         }
 
         // Pull down slide notification Shade
-        if (isNotificationShadeOpen) {
+        AnimatedVisibility(
+            visible = isNotificationShadeOpen,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
             NotificationShade(viewModel)
+        }
+    }
+}
+
+@Composable
+fun JellyBeanSimulatorView(viewModel: JellyBeanViewModel) {
+    val isLocked by viewModel.isLocked.collectAsState()
+    val isNotificationShadeOpen by viewModel.isNotificationShadeOpen.collectAsState()
+    val activeApp by viewModel.activeApp.collectAsState()
+    val isDrawerOpen by viewModel.isDrawerOpen.collectAsState()
+    val showRecentsOverlay by viewModel.showRecentAppsOverlay.collectAsState()
+    val wallpaperBmp by viewModel.wallpaperSelected.collectAsState()
+    val wallpaperPreset by viewModel.wallpaperPreset.collectAsState()
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF060608)),
+        contentAlignment = Alignment.Center
+    ) {
+        val screenWidth = maxWidth
+        val screenHeight = maxHeight
+        val showFullBezel = screenWidth >= 400.dp && screenHeight >= 760.dp
+
+        if (showFullBezel) {
+            // Elegant background pattern for wide screens representing a workbench
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawBehind {
+                        // Soft horizontal scanlines in desk background
+                        val scanlineSpacing = 16.dp.toPx()
+                        for (y in 0..size.height.toInt() step scanlineSpacing.toInt()) {
+                            drawLine(
+                                color = Color.White.copy(alpha = 0.015f),
+                                start = Offset(0f, y.toFloat()),
+                                end = Offset(size.width, y.toFloat()),
+                                strokeWidth = 1f
+                            )
+                        }
+                        // Radial ambient blue back-light glow behind the physical device mockup
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color(0xFF1B314B).copy(alpha = 0.35f), Color.Transparent),
+                                radius = size.width * 0.5f
+                            ),
+                            center = Offset(size.width / 2, size.height / 2)
+                        )
+                    }
+            )
+
+            // Physical Side Keys and Chassis
+            Box(
+                modifier = Modifier.size(width = 380.dp, height = 744.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Physical Volume Rocker on the left side
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = (-4).dp, y = (-40).dp)
+                        .width(4.dp)
+                        .height(80.dp)
+                        .background(Color(0xFF222224), RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp))
+                        .border(1.dp, Color(0xFF3C3C40), RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp))
+                        .clickable {
+                            viewModel.playSystemSound("click")
+                            viewModel.postNotification("Audio", "Volumen del dispositivo ajustado", AppType.SETTINGS)
+                        }
+                ) {}
+
+                // Physical Power Key on the right side
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .offset(x = 4.dp, y = (-100).dp)
+                        .width(4.dp)
+                        .height(45.dp)
+                        .background(Color(0xFF222224), RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
+                        .border(1.dp, Color(0xFF3C3C40), RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
+                        .clickable {
+                            viewModel.playSystemSound("click")
+                            if (isLocked) viewModel.unlock() else viewModel.lock()
+                        }
+                ) {}
+
+                // Phone Bezel Frame
+                Card(
+                    modifier = Modifier
+                        .size(width = 370.dp, height = 730.dp)
+                        .shadow(24.dp, RoundedCornerShape(44.dp)),
+                    shape = RoundedCornerShape(44.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF111113)),
+                    border = BorderStroke(2.5.dp, Color(0xFF28282C))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Top Bezel: Speaker grill + front-facing camera
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Speaker capsule
+                            Box(
+                                modifier = Modifier
+                                    .width(62.dp)
+                                    .height(5.dp)
+                                    .background(Color(0xFF222225), RoundedCornerShape(2.5.dp))
+                                    .border(0.5.dp, Color(0xFF09090A), RoundedCornerShape(2.5.dp))
+                            )
+                            // Front Camera Lens
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 72.dp)
+                                    .size(7.dp)
+                                    .background(Color(0xFF040C14), CircleShape)
+                                    .border(1.dp, Color(0xFF1B3252), CircleShape)
+                            )
+                        }
+
+                        // Inner Screen Area
+                        Box(
+                            modifier = Modifier
+                                .width(346.dp)
+                                .weight(1f)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color.Black)
+                        ) {
+                            ScreenContent(
+                                viewModel = viewModel,
+                                isLocked = isLocked,
+                                isNotificationShadeOpen = isNotificationShadeOpen,
+                                activeApp = activeApp,
+                                isDrawerOpen = isDrawerOpen,
+                                showRecentsOverlay = showRecentsOverlay,
+                                wallpaperBmp = wallpaperBmp,
+                                wallpaperPreset = wallpaperPreset
+                            )
+                        }
+
+                        // Bottom Bezel: Pulsing Retro LED Indicator
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "bezel_led")
+                            val ledAlpha by infiniteTransition.animateFloat(
+                                initialValue = 0.25f,
+                                targetValue = 0.85f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1800, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "led_alpha"
+                            )
+                            // Subtle blue breath notification indicator (classic galaxy nexus style)
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .shadow(4.dp, CircleShape)
+                                    .background(Color(0xFF33B5E5).copy(alpha = ledAlpha), CircleShape)
+                                    .border(0.5.dp, Color(0xFF33B5E5).copy(alpha = 0.8f), CircleShape)
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Full screen mode for small/compact screens
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+            ) {
+                ScreenContent(
+                    viewModel = viewModel,
+                    isLocked = isLocked,
+                    isNotificationShadeOpen = isNotificationShadeOpen,
+                    activeApp = activeApp,
+                    isDrawerOpen = isDrawerOpen,
+                    showRecentsOverlay = showRecentsOverlay,
+                    wallpaperBmp = wallpaperBmp,
+                    wallpaperPreset = wallpaperPreset
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun JellyBeanWaveWallpaper(themeProfile: String = "BLUE", modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val width = size.width
+        val height = size.height
+
+        val bgColors = when (themeProfile) {
+            "PURPLE" -> listOf(Color(0xFF11021C), Color(0xFF0A0216), Color(0xFF010005))
+            "GREEN" -> listOf(Color(0xFF021204), Color(0xFF010902), Color(0xFF000300))
+            "RED" -> listOf(Color(0xFF160101), Color(0xFF0F0101), Color(0xFF050000))
+            "AMBER" -> listOf(Color(0xFF1C1201), Color(0xFF120C01), Color(0xFF050300))
+            else -> listOf(Color(0xFF0F041C), Color(0xFF030D22), Color(0xFF01040A))
+        }
+
+        val waveAColors = when (themeProfile) {
+            "PURPLE" -> listOf(Color(0x2ABA68C8), Color(0x00BA68C8))
+            "GREEN" -> listOf(Color(0x2A1B9A2F), Color(0x001B9A2F))
+            "RED" -> listOf(Color(0x2A9C27B0), Color(0x009C27B0))
+            "AMBER" -> listOf(Color(0x2AD81B60), Color(0x00D81B60))
+            else -> listOf(Color(0x2A6A1B9A), Color(0x006A1B9A))
+        }
+
+        val waveBColors = when (themeProfile) {
+            "PURPLE" -> listOf(Color(0x2F7B1FA2), Color(0x007B1FA2))
+            "GREEN" -> listOf(Color(0x3500E676), Color(0x0000E676))
+            "RED" -> listOf(Color(0x35FF1744), Color(0x00FF1744))
+            "AMBER" -> listOf(Color(0x35FFAB00), Color(0x00FFAB00))
+            else -> listOf(Color(0x3500B0FF), Color(0x0000B0FF))
+        }
+
+        val waveCColors = when (themeProfile) {
+            "PURPLE" -> listOf(Color(0x2033B5E5), Color(0x0033B5E5))
+            "GREEN" -> listOf(Color(0x20FFD600), Color(0x00FFD600))
+            "RED" -> listOf(Color(0x20FF9100), Color(0x00FF9100))
+            "AMBER" -> listOf(Color(0x20FF3D00), Color(0x00FF3D00))
+            else -> listOf(Color(0x20FF8F00), Color(0x00FF8F00))
+        }
+
+        val waveDColors = when (themeProfile) {
+            "PURPLE" -> listOf(Color(0x00EA80FC), Color(0x44E040FB), Color(0x66D500F9), Color(0x44E040FB), Color(0x00EA80FC))
+            "GREEN" -> listOf(Color(0x00B2FF59), Color(0x4400E676), Color(0x6600C853), Color(0x4400E676), Color(0x00B2FF59))
+            "RED" -> listOf(Color(0x00FF8A80), Color(0x44FF5252), Color(0x66FF1744), Color(0x44FF5252), Color(0x00FF8A80))
+            "AMBER" -> listOf(Color(0x00FFE082), Color(0x44FFD54F), Color(0x66FFC107), Color(0x44FFD54F), Color(0x00FFE082))
+            else -> listOf(Color(0x0000E5FF), Color(0x4400E5FF), Color(0x6633B5E5), Color(0x4400E5FF), Color(0x0000E5FF))
+        }
+
+        val haloColor = when (themeProfile) {
+            "PURPLE" -> Color(0xFFEA80FC)
+            "GREEN" -> Color(0xFFFFD600)
+            "RED" -> Color(0xFFFF9100)
+            "AMBER" -> Color(0xFFFF3D00)
+            else -> Color(0xFFFFA000)
+        }
+
+        val coreColor = when (themeProfile) {
+            "PURPLE" -> Color(0xFFD500F9)
+            "GREEN" -> Color(0xFF00E676)
+            "RED" -> Color(0xFFFF1744)
+            "AMBER" -> Color(0xFFFFC107)
+            else -> Color(0xFF33B5E5)
+        }
+
+        // 1. Base Gradient
+        drawRect(brush = Brush.verticalGradient(colors = bgColors))
+
+        // 2. Overlapping sweeping waves (Bezier Curves with gradients)
+        // Wave A
+        val pathA = Path().apply {
+            moveTo(0f, height * 0.45f)
+            cubicTo(
+                width * 0.35f, height * 0.25f,
+                width * 0.65f, height * 0.85f,
+                width, height * 0.55f
+            )
+            lineTo(width, height)
+            lineTo(0f, height)
+            close()
+        }
+        drawPath(
+            path = pathA,
+            brush = Brush.verticalGradient(
+                colors = waveAColors,
+                startY = height * 0.3f,
+                endY = height
+            )
+        )
+
+        // Wave B
+        val pathB = Path().apply {
+            moveTo(0f, height * 0.65f)
+            cubicTo(
+                width * 0.4f, height * 0.45f,
+                width * 0.6f, height * 0.9f,
+                width, height * 0.75f
+            )
+            lineTo(width, height)
+            lineTo(0f, height)
+            close()
+        }
+        drawPath(
+            path = pathB,
+            brush = Brush.verticalGradient(
+                colors = waveBColors,
+                startY = height * 0.4f,
+                endY = height
+            )
+        )
+
+        // Wave C
+        val pathC = Path().apply {
+            moveTo(0f, height * 0.15f)
+            cubicTo(
+                width * 0.3f, height * 0.05f,
+                width * 0.7f, height * 0.45f,
+                width, height * 0.25f
+            )
+            lineTo(width, 0f)
+            lineTo(0f, 0f)
+            close()
+        }
+        drawPath(
+            path = pathC,
+            brush = Brush.verticalGradient(
+                colors = waveCColors,
+                startY = 0f,
+                endY = height * 0.4f
+            )
+        )
+
+        // Wave D
+        val pathD = Path().apply {
+            moveTo(0f, height * 0.52f)
+            cubicTo(
+                width * 0.35f, height * 0.42f,
+                width * 0.65f, height * 0.72f,
+                width, height * 0.58f
+            )
+            lineTo(width, height * 0.65f)
+            cubicTo(
+                width * 0.65f, height * 0.79f,
+                width * 0.35f, height * 0.49f,
+                0f, height * 0.59f
+            )
+            close()
+        }
+        drawPath(
+            path = pathD,
+            brush = Brush.linearGradient(
+                colors = waveDColors,
+                start = Offset(0f, height * 0.5f),
+                end = Offset(width, height * 0.62f)
+            )
+        )
+
+        // 3. Floating bokeh particles
+        val particles = listOf(
+            Offset(width * 0.12f, height * 0.25f) to 22f,
+            Offset(width * 0.28f, height * 0.62f) to 34f,
+            Offset(width * 0.45f, height * 0.41f) to 15f,
+            Offset(width * 0.68f, height * 0.18f) to 28f,
+            Offset(width * 0.78f, height * 0.72f) to 40f,
+            Offset(width * 0.89f, height * 0.38f) to 18f,
+            Offset(width * 0.05f, height * 0.85f) to 30f,
+            Offset(width * 0.55f, height * 0.82f) to 25f
+        )
+
+        particles.forEach { (pos, radius) ->
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(haloColor.copy(alpha = 0.24f), Color.Transparent),
+                    center = pos,
+                    radius = radius * 1.5f
+                ),
+                center = pos,
+                radius = radius * 1.5f
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(coreColor.copy(alpha = 0.3f), Color.Transparent),
+                    center = pos,
+                    radius = radius
+                ),
+                center = pos,
+                radius = radius
+            )
+        }
+    }
+}
+
+@Composable
+fun NexusMosaicWallpaper(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        // Background dark gradient
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color(0xFF030A16), Color(0xFF0A0210))
+            )
+        )
+
+        // Draw some retro diagonal mosaic tiles
+        val colors = listOf(
+            Color(0x1A33B5E5), // Blue
+            Color(0x1A99CC00), // Green
+            Color(0x1AFFBB33), // Yellow
+            Color(0x1AFF4444), // Red
+            Color(0x1AAA66CC)  // Purple
+        )
+
+        val cols = 8
+        val rows = 12
+        val cellW = w / cols
+        val cellH = h / rows
+
+        for (i in 0 until cols) {
+            for (j in 0 until rows) {
+                val hash = (i * 31 + j * 17)
+                if (hash % 3 == 0) {
+                    val colorIndex = (hash % colors.size)
+                    val baseColor = colors[colorIndex]
+
+                    val sizeFactor = 0.4f + (hash % 5) * 0.12f
+                    val tileW = cellW * sizeFactor
+                    val tileH = cellH * sizeFactor
+
+                    val x = i * cellW + (hash % 7) * (cellW / 10f)
+                    val y = j * cellH + (hash % 11) * (cellH / 15f)
+
+                    drawRect(
+                        color = baseColor,
+                        topLeft = Offset(x, y),
+                        size = Size(tileW, tileH)
+                    )
+
+                    drawRect(
+                        color = baseColor.copy(alpha = baseColor.alpha * 1.5f),
+                        topLeft = Offset(x + tileW * 0.2f, y + tileH * 0.2f),
+                        size = Size(tileW * 0.6f, tileH * 0.6f)
+                    )
+                }
+            }
         }
     }
 }
@@ -1016,6 +1955,7 @@ fun HoloStatusBar(viewModel: JellyBeanViewModel) {
     val wifiEnabled by viewModel.isWifiEnabled.collectAsState()
     val notifications by viewModel.notifications.collectAsState()
     val ticker by viewModel.notificationTicker.collectAsState()
+    val soundProfile by viewModel.soundProfile.collectAsState()
 
     Row(
         modifier = Modifier
@@ -1033,8 +1973,16 @@ fun HoloStatusBar(viewModel: JellyBeanViewModel) {
         ) {
             val currentTicker = ticker
             if (currentTicker != null) {
+                val tickerIcon = when (currentTicker.appType) {
+                    AppType.MESSAGING -> Icons.Default.ChatBubble
+                    AppType.CLOCK -> Icons.Default.AccessTime
+                    AppType.CALENDAR -> Icons.Default.CalendarToday
+                    AppType.SETTINGS -> Icons.Default.Settings
+                    AppType.ABOUT -> Icons.Default.Info
+                    else -> Icons.Default.Notifications
+                }
                 Icon(
-                    imageVector = if (currentTicker.appType == AppType.MESSAGING) Icons.Default.ChatBubble else Icons.Default.Info,
+                    imageVector = tickerIcon,
                     contentDescription = null,
                     tint = Color(0xFF33B5E5),
                     modifier = Modifier.size(14.dp)
@@ -1050,33 +1998,38 @@ fun HoloStatusBar(viewModel: JellyBeanViewModel) {
                 )
             } else {
                 if (notifications.isNotEmpty()) {
-                    val hasMessaging = notifications.any { it.appType == AppType.MESSAGING }
-                    val hasAbout = notifications.any { it.appType == AppType.ABOUT }
-                    
-                    if (hasMessaging) {
+                    notifications.map { it.appType }.distinct().forEach { appType ->
+                        val icon = when (appType) {
+                            AppType.MESSAGING -> Icons.Default.ChatBubble
+                            AppType.CLOCK -> Icons.Default.AccessTime
+                            AppType.CALENDAR -> Icons.Default.CalendarToday
+                            AppType.SETTINGS -> Icons.Default.Settings
+                            AppType.ABOUT -> Icons.Default.Info
+                            else -> Icons.Default.Notifications
+                        }
                         Icon(
-                            imageVector = Icons.Default.ChatBubble,
-                            contentDescription = "SMS Msg",
+                            imageVector = icon,
+                            contentDescription = appType.appName,
                             tint = Color(0xFF33B5E5),
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                     }
-                    if (hasAbout) {
+
+                    val soundIcon = when (soundProfile) {
+                        "SOUND" -> null
+                        "VIBRATE" -> Icons.Default.Vibration
+                        else -> Icons.Default.VolumeMute
+                    }
+                    if (soundIcon != null) {
                         Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "System Update",
-                            tint = Color(0xFF33B5E5),
-                            modifier = Modifier.size(14.dp)
+                            imageVector = soundIcon,
+                            contentDescription = "Sound Mode",
+                            tint = Color(0xFF888888),
+                            modifier = Modifier.size(13.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                     }
-                    Icon(
-                        imageVector = Icons.Default.VolumeMute,
-                        contentDescription = "Silent",
-                        tint = Color(0xFF888888),
-                        modifier = Modifier.size(14.dp)
-                    )
                 }
             }
         }
@@ -1446,8 +2399,38 @@ fun JellyBeanLockScreen(viewModel: JellyBeanViewModel) {
 @Composable
 fun JellyBeanDesktop(viewModel: JellyBeanViewModel) {
     val isFolderOpen by viewModel.isGoogleFolderOpen.collectAsState()
+    val isClockActive by viewModel.isAnalogClockWidgetActive.collectAsState()
+    val widgetOffset by viewModel.analogClockWidgetOffset.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
+        if (isClockActive) {
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            widgetOffset.x.toInt(),
+                            widgetOffset.y.toInt()
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            viewModel.setAnalogClockWidgetOffset(
+                                androidx.compose.ui.geometry.Offset(
+                                    widgetOffset.x + dragAmount.x,
+                                    widgetOffset.y + dragAmount.y
+                                )
+                            )
+                        }
+                    }
+                    .size(130.dp)
+                    .background(Color.Transparent),
+                contentAlignment = Alignment.Center
+            ) {
+                JellyBeanAnalogClock(modifier = Modifier.fillMaxSize())
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1523,6 +2506,11 @@ fun JellyBeanDesktop(viewModel: JellyBeanViewModel) {
                     onClick = { viewModel.launchApp(AppType.CAMERA) }
                 )
 
+                DesktopIconItem(
+                    app = AppType.AI_GENERATOR,
+                    onClick = { viewModel.launchApp(AppType.AI_GENERATOR) }
+                )
+
                 GoogleAppsFolderIcon(onClick = { viewModel.openGoogleFolder() })
             }
 
@@ -1544,58 +2532,86 @@ fun JellyBeanDesktop(viewModel: JellyBeanViewModel) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 10.dp),
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x06FFFFFF),
+                                Color(0x16FFFFFF),
+                                Color(0x02FFFFFF)
+                            )
+                        )
+                    )
+                    .padding(vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 1. Phone (Teléfono)
                 DockIconItem(
                     app = AppType.PHONE,
                     onClick = { viewModel.launchApp(AppType.PHONE) }
                 )
-                DockIconItem(
-                    app = AppType.PEOPLE,
-                    onClick = { viewModel.launchApp(AppType.PEOPLE) }
-                )
 
-                // App Drawer trigger
-                Box(
-                    modifier = Modifier
-                        .size(54.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x33FFFFFF))
-                        .border(1.dp, Color(0xFF33B5E5), CircleShape)
-                        .clickable { viewModel.openDrawer() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Row {
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                        }
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row {
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Box(modifier = Modifier.size(5.dp).background(Color.White))
-                        }
-                    }
-                }
-
+                // 2. Messages (Mensajes)
                 DockIconItem(
                     app = AppType.MESSAGING,
                     onClick = { viewModel.launchApp(AppType.MESSAGING) }
                 )
+
+                // 3. App Drawer (Cajón de aplicaciones) with custom animations
+                AnimatedDockItemContainer(onClick = { viewModel.openDrawer() }) { isPressed ->
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    colors = if (isPressed) {
+                                        listOf(Color(0xFF33B5E5).copy(alpha = 0.5f), Color(0xFF102A35))
+                                    } else {
+                                        listOf(Color(0x33FFFFFF), Color(0x11FFFFFF))
+                                    }
+                                )
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isPressed) Color(0xFF33B5E5) else Color.White.copy(alpha = 0.3f),
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Row {
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                            }
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Row {
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Box(modifier = Modifier.size(5.dp).background(if (isPressed) Color(0xFF33B5E5) else Color.White))
+                            }
+                        }
+                    }
+                }
+
+                // 4. Browser (Navegador)
                 DockIconItem(
                     app = AppType.BROWSER,
                     onClick = { viewModel.launchApp(AppType.BROWSER) }
+                )
+
+                // 5. Camera (Cámara)
+                DockIconItem(
+                    app = AppType.CAMERA,
+                    onClick = { viewModel.launchApp(AppType.CAMERA) }
                 )
             }
         }
@@ -1718,6 +2734,7 @@ fun FolderAppItem(app: AppType, onClick: () -> Unit) {
 @Composable
 fun JellyBeanAppDrawer(viewModel: JellyBeanViewModel) {
     val installedApps by viewModel.installedApps.collectAsState()
+    val activeTab by viewModel.activeAppDrawerTab.collectAsState()
 
     Column(
         modifier = Modifier
@@ -1732,27 +2749,42 @@ fun JellyBeanAppDrawer(viewModel: JellyBeanViewModel) {
         ) {
             Text(
                 text = "APLICACIONES",
-                color = Color(0xFF33B5E5),
+                color = if (activeTab == "APPS") Color(0xFF33B5E5) else Color(0x66FFFFFF),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
+                    .holoTap(shape = RoundedCornerShape(4.dp), onClick = { viewModel.setActiveAppDrawerTab("APPS") })
                     .drawBehind {
-                        drawLine(
-                            color = Color(0xFF33B5E5),
-                            start = Offset(0f, size.height + 8.dp.toPx()),
-                            end = Offset(size.width, size.height + 8.dp.toPx()),
-                            strokeWidth = 2.dp.toPx()
-                        )
+                        if (activeTab == "APPS") {
+                            drawLine(
+                                color = Color(0xFF33B5E5),
+                                start = Offset(0f, size.height + 8.dp.toPx()),
+                                end = Offset(size.width, size.height + 8.dp.toPx()),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
                     }
                     .padding(horizontal = 8.dp)
             )
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = "WIDGETS",
-                color = Color(0x66FFFFFF),
+                color = if (activeTab == "WIDGETS") Color(0xFF33B5E5) else Color(0x66FFFFFF),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 8.dp)
+                modifier = Modifier
+                    .holoTap(shape = RoundedCornerShape(4.dp), onClick = { viewModel.setActiveAppDrawerTab("WIDGETS") })
+                    .drawBehind {
+                        if (activeTab == "WIDGETS") {
+                            drawLine(
+                                color = Color(0xFF33B5E5),
+                                start = Offset(0f, size.height + 8.dp.toPx()),
+                                end = Offset(size.width, size.height + 8.dp.toPx()),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
+                    }
+                    .padding(horizontal = 8.dp)
             )
 
             Spacer(modifier = Modifier.weight(1f))
@@ -1773,16 +2805,166 @@ fun JellyBeanAppDrawer(viewModel: JellyBeanViewModel) {
                 .background(Color.White.copy(alpha = 0.12f))
         )
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(installedApps.toList()) { app ->
-                AppDrawerGridItem(app = app, onClick = { viewModel.launchApp(app) })
+        if (activeTab == "APPS") {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(installedApps.toList()) { app ->
+                    AppDrawerGridItem(app = app, onClick = { viewModel.launchApp(app) })
+                }
+            }
+        } else {
+            // Widgets Tab
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                Text(
+                    "Toca un widget para añadirlo o quitarlo del escritorio principal:",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                val isClockActive by viewModel.isAnalogClockWidgetActive.collectAsState()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Analog Clock widget item card
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(160.dp)
+                            .clickable {
+                                val nextState = !isClockActive
+                                viewModel.setAnalogClockWidgetActive(nextState)
+                                viewModel.playSystemSound("tick")
+                                if (nextState) {
+                                    viewModel.postNotification(
+                                        "Ajustes de Inicio",
+                                        "Widget de reloj analógico añadido al escritorio",
+                                        AppType.CLOCK
+                                    )
+                                } else {
+                                    viewModel.postNotification(
+                                        "Ajustes de Inicio",
+                                        "Widget de reloj analógico quitado del escritorio",
+                                        AppType.CLOCK
+                                    )
+                                }
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isClockActive) Color(0x2233B5E5) else Color(0xFF161616)
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isClockActive) Color(0xFF33B5E5) else Color(0xFF333333)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Mini Analog Clock preview
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                JellyBeanAnalogClock(modifier = Modifier.fillMaxSize())
+                            }
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "Reloj Analógico",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (isClockActive) "ACTIVO (Toca para quitar)" else "INACTIVO (Toca para añadir)",
+                                    color = if (isClockActive) Color(0xFF33B5E5) else Color.Gray,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
+                    // Static Search Bar widget preview card
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(160.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                        border = BorderStroke(1.dp, Color(0xFF333333)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Mini Google search preview
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(32.dp)
+                                    .background(Color(0x11FFFFFF), RoundedCornerShape(2.dp))
+                                    .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(2.dp))
+                                    .padding(horizontal = 6.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "Google",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Serif
+                                    )
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = null,
+                                        tint = Color(0xFF33B5E5),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            }
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "Buscador de Google",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "FIJO EN INICIO",
+                                    color = Color(0xFF99CC00),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1793,7 +2975,7 @@ fun AppDrawerGridItem(app: AppType, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clickable { onClick() }
+            .holoTap(shape = RoundedCornerShape(8.dp), onClick = onClick)
             .padding(vertical = 8.dp)
     ) {
         JellyBeanAppIcon(
@@ -1878,8 +3060,33 @@ fun NotificationShade(viewModel: JellyBeanViewModel) {
                             )
                         }
                         Spacer(modifier = Modifier.width(6.dp))
-                        IconButton(onClick = { viewModel.toggleNotificationShade() }) {
-                            Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
+                        
+                        // Vintage Holo Back button to close the notification shade
+                        Button(
+                            onClick = { viewModel.toggleNotificationShade() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+                            border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                            shape = RoundedCornerShape(2.dp),
+                            modifier = Modifier.height(34.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowBack,
+                                    contentDescription = "Cerrar",
+                                    tint = Color(0xFF33B5E5),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "ATRÁS",
+                                    color = Color(0xFF33B5E5),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -2247,30 +3454,191 @@ fun ShadeToggleItem(icon: ImageVector, label: String, active: Boolean, onToggle:
 
 @Composable
 fun NotificationRowItem(item: AppNotification, viewModel: JellyBeanViewModel) {
+    var isExpanded by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { viewModel.launchApp(item.appType) },
-        colors = CardDefaults.cardColors(containerColor = Color(0x11FFFFFF)),
-        border = BorderStroke(1.dp, Color(0x08FFFFFF))
+            .animateContentSize()
+            .clickable { isExpanded = !isExpanded },
+        colors = CardDefaults.cardColors(containerColor = Color(0x1C1C24)),
+        border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = if (isExpanded) 0.5f else 0.12f))
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(12.dp)
         ) {
-            Icon(
-                imageVector = if (item.appType == AppType.MESSAGING) Icons.Default.ChatBubble else Icons.Default.Info,
-                contentDescription = null,
-                tint = Color(0xFF33B5E5),
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = item.sender, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text(text = item.message, color = Color.Gray, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val icon = when (item.appType) {
+                    AppType.MESSAGING -> Icons.Default.ChatBubble
+                    AppType.CLOCK -> Icons.Default.AccessTime
+                    AppType.CALENDAR -> Icons.Default.CalendarToday
+                    AppType.SETTINGS -> Icons.Default.Settings
+                    AppType.ABOUT -> Icons.Default.Info
+                    else -> Icons.Default.Notifications
+                }
+
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Color(0xFF33B5E5),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.sender,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (!isExpanded) {
+                        Text(
+                            text = item.message,
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Expand / Collapse Chevron
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Colapsar" else "Expandir",
+                    tint = Color(0xFF33B5E5),
+                    modifier = Modifier.size(20.dp)
+                )
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Dismiss Button
+                IconButton(
+                    onClick = { viewModel.dismissNotification(item.id) },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Eliminar",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
-            IconButton(onClick = { viewModel.dismissNotification(item.id) }) {
-                Icon(imageVector = Icons.Default.Close, contentDescription = "Eliminar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = item.message,
+                    color = Color.LightGray,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(start = 36.dp, end = 4.dp, bottom = 8.dp)
+                )
+
+                // Quick action buttons in Holo Blue styling
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 36.dp, top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Action 1: Open/Launch the main app associated with this notification
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.launchApp(item.appType)
+                            viewModel.toggleNotificationShade()
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                        border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(2.dp),
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                    ) {
+                        Text(text = "ABRIR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Contextual quick actions matching the specific app type
+                    when (item.appType) {
+                        AppType.MESSAGING -> {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.launchApp(AppType.MESSAGING)
+                                    viewModel.toggleNotificationShade()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text(text = "RESPONDER", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.launchApp(AppType.PHONE)
+                                    viewModel.toggleNotificationShade()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text(text = "LLAMAR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        AppType.CLOCK -> {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.launchApp(AppType.CLOCK)
+                                    viewModel.toggleNotificationShade()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text(text = "VER ALARMAS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        AppType.CALENDAR -> {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.launchApp(AppType.CALENDAR)
+                                    viewModel.toggleNotificationShade()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text(text = "VER AGENDA", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        AppType.SETTINGS -> {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.launchApp(AppType.SETTINGS)
+                                    viewModel.toggleNotificationShade()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF33B5E5)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text(text = "CONFIGURAR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
             }
         }
     }
@@ -2336,6 +3704,11 @@ fun JellyBeanAppWindow(app: AppType, viewModel: JellyBeanViewModel) {
                     AppType.MUSIC -> RetroMusicActivity(viewModel)
                     AppType.CALENDAR -> RetroCalendarActivity(viewModel)
                     AppType.ABOUT -> AboutJellyBeanActivity(viewModel)
+                    AppType.FILE_MANAGER -> FileManagerActivity(viewModel)
+                    AppType.THEMES -> ThemesActivity(viewModel)
+                    AppType.AI_GENERATOR -> AIGeneratorActivity(viewModel)
+                    AppType.SOUND_RECORDER -> SoundRecorderActivity(viewModel)
+                    AppType.DOWNLOADS -> DownloadsActivity(viewModel)
                 }
             }
         }
@@ -2350,79 +3723,224 @@ fun JellyBeanAppWindow(app: AppType, viewModel: JellyBeanViewModel) {
 fun DialerActivity(viewModel: JellyBeanViewModel) {
     var dialString by remember { mutableStateOf("") }
     var inCall by remember { mutableStateOf(false) }
+    var activeTab by remember { mutableStateOf("Teclado") }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .background(Color(0xFF161616))
     ) {
+        // Top Navigation Tabs (Image 5)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF222222))
+        ) {
+            val tabs = listOf("Teclado", "Recientes", "Favoritos", "Contactos")
+            tabs.forEach { tab ->
+                val isSelected = activeTab == tab
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { activeTab = tab }
+                        .padding(vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = tab,
+                        color = if (isSelected) Color(0xFF33B5E5) else Color.LightGray,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(2.dp)
+                            .background(if (isSelected) Color(0xFF33B5E5) else Color.Transparent)
+                    )
+                }
+            }
+        }
+
         if (!inCall) {
-            Text(
-                text = dialString.ifEmpty { "Escribe un número..." },
-                color = if (dialString.isEmpty()) Color.DarkGray else Color(0xFF33B5E5),
-                fontSize = 28.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(vertical = 20.dp)
-            )
+            if (activeTab == "Teclado") {
+                // Dialer Display Screen (Image 5)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0F0F0F))
+                        .padding(horizontal = 16.dp, vertical = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = dialString.ifEmpty { "Introduce número" },
+                        color = if (dialString.isEmpty()) Color.DarkGray else Color.White,
+                        fontSize = 32.sp,
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Light,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    
+                    if (dialString.isNotEmpty()) {
+                        IconButton(
+                            onClick = { dialString = "" },
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Limpiar todo", tint = Color.Gray)
+                        }
+                    }
+                }
 
-            val keys = listOf(
-                listOf("1", "2", "3"),
-                listOf("4", "5", "6"),
-                listOf("7", "8", "9"),
-                listOf("*", "0", "#")
-            )
+                Divider(color = Color(0xFF2B2B2B), thickness = 1.dp)
 
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                keys.forEach { row ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        row.forEach { valChar ->
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .aspectRatio(1.3f)
-                                    .background(Color(0x19FFFFFF), CircleShape)
-                                    .border(1.dp, Color(0x3333B5E5), CircleShape)
-                                    .clickable { dialString += valChar },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(text = valChar, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                // Keypad grid (Image 5)
+                val keys = listOf(
+                    listOf("1" to "", "2" to "A B C", "3" to "D E F"),
+                    listOf("4" to "G H I", "5" to "J K L", "6" to "M N O"),
+                    listOf("7" to "P Q R S", "8" to "T U V", "9" to "W X Y Z"),
+                    listOf("*" to "", "0" to "+", "#" to "")
+                )
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.SpaceAround
+                ) {
+                    keys.forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            row.forEach { (num, alpha) ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(1.6f)
+                                        .background(Color(0xFF1C1C1C))
+                                        .clickable { dialString += num }
+                                        .padding(4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            text = num,
+                                            color = Color.White,
+                                            fontSize = 26.sp,
+                                            fontWeight = FontWeight.Normal
+                                        )
+                                        if (alpha.isNotEmpty()) {
+                                            Text(
+                                                text = alpha,
+                                                color = Color.Gray,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Normal,
+                                                letterSpacing = 1.sp
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { if (dialString.isNotEmpty()) dialString = dialString.dropLast(1) }) {
-                    Icon(imageVector = Icons.Default.Backspace, contentDescription = "Delete char", tint = Color.Gray)
-                }
-
-                Box(
+                // Action Call Dock (Image 5)
+                Row(
                     modifier = Modifier
-                        .size(60.dp)
-                        .background(Color(0xFF669900), CircleShape)
-                        .clickable { if (dialString.isNotEmpty()) inCall = true },
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .background(Color(0xFF222222))
+                        .padding(vertical = 10.dp, horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(imageVector = Icons.Default.Call, contentDescription = "Llamar", tint = Color.White, modifier = Modifier.size(28.dp))
+                    IconButton(
+                        onClick = { if (dialString.isNotEmpty()) dialString = dialString.dropLast(1) },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Backspace, contentDescription = "Borrar", tint = Color.LightGray)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(70.dp, 44.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF669900))
+                            .clickable { if (dialString.isNotEmpty()) inCall = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(imageVector = Icons.Default.Call, contentDescription = "Llamar", tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (dialString.isNotEmpty()) {
+                                activeTab = "Contactos"
+                            }
+                        },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.PersonAdd, contentDescription = "Añadir Contacto", tint = Color.LightGray)
+                    }
+                }
+            } else {
+                // Secondary tabs contents
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Historial y Contactos Jelly Bean",
+                        color = Color(0xFF33B5E5),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    if (activeTab == "Contactos") {
+                        val contacts = listOf("Abuela", "Carlos Gómez", "Lyoneidas", "Mamá", "Pedro Martínez", "Asistente AI (Gemini)")
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(contacts) { person ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0x11FFFFFF))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null, tint = Color(0xFF33B5E5))
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column {
+                                            Text(text = person, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Text(text = "Móvil", color = Color.LightGray, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "No hay llamadas recientes ni favoritos en esta simulación.",
+                            color = Color.Gray,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 40.dp)
+                        )
+                    }
                 }
             }
         } else {
+            // Calling state UI
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -2501,107 +4019,364 @@ fun BrowserActivity(viewModel: JellyBeanViewModel) {
     val resultText by viewModel.searchResultText.collectAsState()
     val sources by viewModel.searchSources.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    var currentUrl by remember { mutableStateOf("www.androidpolice.com") }
+    var inSearchMode by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFE5E5E5))) {
+        // Top Browser Navigation Bar (Identical to Image 6)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF0F0F0F))
-                .padding(8.dp),
+                .background(Color(0xFF151515))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextField(
-                value = query,
-                onValueChange = { viewModel.updateSearchQuery(it) },
-                placeholder = { Text(text = "Busca en Google Grounded...", color = Color.Gray, fontSize = 13.sp) },
-                colors = TextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedContainerColor = Color(0xFF1D1D1D),
-                    unfocusedContainerColor = Color(0xFF1D1D1D),
-                    focusedIndicatorColor = Color(0xFF33B5E5)
-                ),
+            // Icon / Favicon (pink-blue globe like Image 6)
+            Canvas(modifier = Modifier.size(20.dp)) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF00B0FF), Color(0xFFE040FB))
+                    ),
+                    radius = size.width / 2f
+                )
+                // Globe grid lines
+                drawLine(color = Color.White.copy(alpha = 0.5f), start = Offset(0f, size.height/2f), end = Offset(size.width, size.height/2f))
+                drawLine(color = Color.White.copy(alpha = 0.5f), start = Offset(size.width/2f, 0f), end = Offset(size.width/2f, size.height))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Address/URL TextField
+            BasicTextField(
+                value = if (inSearchMode) query else currentUrl,
+                onValueChange = {
+                    inSearchMode = true
+                    viewModel.updateSearchQuery(it)
+                },
+                textStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace),
+                cursorBrush = SolidColor(Color(0xFF33B5E5)),
                 modifier = Modifier
                     .weight(1f)
-                    .height(50.dp)
+                    .background(Color(0xFF2B2B2B), RoundedCornerShape(2.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                decorationBox = { innerTextField ->
+                    innerTextField()
+                }
             )
+
             Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = { viewModel.performSearch() },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222)),
-                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
-                modifier = Modifier.height(44.dp)
+
+            // Stacked Cards Tab Switcher Icon (Image 6)
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .border(1.5.dp, Color.White, RoundedCornerShape(2.dp))
+                    .clickable {
+                        inSearchMode = false
+                        currentUrl = "www.androidpolice.com"
+                        viewModel.updateSearchQuery("")
+                    },
+                contentAlignment = Alignment.Center
             ) {
-                Icon(imageVector = Icons.Default.Search, contentDescription = "Buscar", tint = Color(0xFF33B5E5))
+                Column(verticalArrangement = Arrangement.spacedBy(1.5.dp)) {
+                    Box(modifier = Modifier.size(14.dp, 2.dp).background(Color.White))
+                    Box(modifier = Modifier.size(14.dp, 2.dp).background(Color.White))
+                    Box(modifier = Modifier.size(14.dp, 2.dp).background(Color.White))
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Action button (Search / More)
+            IconButton(
+                onClick = {
+                    if (inSearchMode && query.isNotEmpty()) {
+                        viewModel.performSearch()
+                    } else {
+                        inSearchMode = false
+                        currentUrl = "www.androidpolice.com"
+                    }
+                },
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    imageVector = if (inSearchMode) Icons.Default.Search else Icons.Default.MoreVert,
+                    contentDescription = "Opciones",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(Color.White.copy(alpha = 0.2f))
-        )
-
+        // Web Content View
         if (loading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().background(Color(0xFF1A1A1A)), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color(0xFF33B5E5))
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(text = "Buscando en Google con Gemini AI...", color = Color.Gray, fontSize = 12.sp)
+                    Text(text = "Cargando página...", color = Color.Gray, fontSize = 12.sp)
                 }
             }
-        } else if (resultText.isNotEmpty()) {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(14.dp)) {
+        } else if (inSearchMode && resultText.isNotEmpty()) {
+            // Google AI Search Result View
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF111111))
+                    .padding(12.dp)
+            ) {
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0x19FFFFFF)),
-                        border = BorderStroke(1.dp, Color(0x33FFFFFF))
+                        border = BorderStroke(1.dp, Color(0xFF33B5E5))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = Color(0xFF99CC00))
+                                Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = Color(0xFF33B5E5))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "Respuesta de Búsqueda Conectada", color = Color(0xFF99CC00), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(text = "Búsqueda Google AI", color = Color(0xFF33B5E5), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(text = resultText, color = Color.White, fontSize = 14.sp, lineHeight = 20.sp)
                         }
                     }
                 }
-
+                
                 if (sources.isNotEmpty()) {
                     item {
-                        Text(text = "Fuentes y Referencias:", color = Color(0xFF33B5E5), fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                        Text(text = "Enlaces encontrados:", color = Color(0xFF33B5E5), fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
                     }
                     items(sources) { webSource ->
                         Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             colors = CardDefaults.cardColors(containerColor = Color(0x0CFFFFFF))
                         ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(imageVector = Icons.Default.Link, contentDescription = null, tint = Color(0xFF33B5E5), modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(text = webSource.title ?: "Página Web", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(text = webSource.uri ?: "", color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(text = webSource.title ?: "Página Web", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(text = webSource.uri ?: "", color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
                 }
             }
         } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Icon(imageVector = Icons.Default.Explore, contentDescription = null, tint = Color(0x22FFFFFF), modifier = Modifier.size(64.dp))
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(text = "Usa la barra para buscar información real en tiempo real.", color = Color.DarkGray, fontSize = 13.sp, textAlign = TextAlign.Center)
+            // AUTHENTIC MOCKUP OF IMAGE 6 (www.androidpolice.com in 2012)
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White)
+            ) {
+                // 1. Android Police Header Logo Banner
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0F2537))
+                            .padding(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column {
+                                Text(
+                                    text = "ANDROID POLICE",
+                                    color = Color(0xFF00E5FF),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 2.sp
+                                )
+                                Text(
+                                    text = "LOOKING AFTER ALL THINGS ANDROID",
+                                    color = Color.White,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            // Little green Android robot controller
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .background(Color(0xFF99CC00), RoundedCornerShape(4.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("AP", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // 2. Nav categories bar
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF1E354A))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val tags = listOf("News", "Tutorials", "Tips", "Reviews", "Mods", "Apps/Games", "Devices", "About")
+                        tags.forEach { tag ->
+                            Text(
+                                text = tag,
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // 3. Toyota 2012 Corolla Advert
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFF0F0F0))
+                            .padding(8.dp)
+                            .border(1.dp, Color(0xFFDCDCDC)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 40.dp, height = 24.dp)
+                                    .background(Color(0xFF33B5E5), RoundedCornerShape(2.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("TOYOTA", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("2012 Toyota Corolla", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("Start at value. Arrive at valuable.", color = Color.Gray, fontSize = 9.sp)
+                            }
+                        }
+                    }
+                }
+
+                // 4. Main Article
+                item {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Book Giveaway #14: Use Your Web Developing Skills To Create Android Apps With \"Building Android Apps With HTML, CSS, And JavaScript\"",
+                            color = Color(0xFF1A0DAB),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Posted by Artem Russakovskii",
+                            color = Color.Gray,
+                            fontSize = 10.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            text = "You're already a web developer, master of HTML, CSS, and JavaScript. You have a great idea for an Android App, but your particular skill set doesn't help you create that app. Or does it? O'Reilly media just released a 176 page 2nd edition of \"Building Android Apps With HTML, CSS, And JavaScript\" by Jonathan Stark and Brian Albers that explains how to do just that.",
+                            color = Color.Black,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Book cover representation with turkey bird (Image 6)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp)
+                                .background(Color(0xFFFDFDFD))
+                                .border(1.dp, Color(0xFFCCCCCC))
+                                .padding(12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // O'Reilly Book Design
+                                Box(
+                                    modifier = Modifier
+                                        .width(95.dp)
+                                        .fillMaxHeight()
+                                        .background(Color.White)
+                                        .border(1.5.dp, Color.Black)
+                                ) {
+                                    Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                                        Text("O'REILLY", color = Color.Black, fontSize = 8.sp, fontWeight = FontWeight.Black)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        
+                                        // Bird Drawing
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(55.dp)
+                                                .border(0.5.dp, Color.Gray),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Canvas(modifier = Modifier.size(35.dp)) {
+                                                drawOval(
+                                                    color = Color(0xFF8D6E63),
+                                                    topLeft = Offset(5f, 15f),
+                                                    size = Size(25.dp.toPx(), 18.dp.toPx())
+                                                )
+                                                drawLine(
+                                                    color = Color.Black,
+                                                    start = Offset(5f, 22f),
+                                                    end = Offset(-5f, 24f),
+                                                    strokeWidth = 2f
+                                                )
+                                                drawLine(color = Color.Black, start = Offset(15f, 30f), end = Offset(12f, 40f), strokeWidth = 2f)
+                                                drawLine(color = Color.Black, start = Offset(25f, 30f), end = Offset(28f, 40f), strokeWidth = 2f)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Building Android Apps",
+                                            color = Color.Black,
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            lineHeight = 9.sp
+                                        )
+                                        Text(
+                                            text = "with HTML, CSS, & JS",
+                                            color = Color.Gray,
+                                            fontSize = 6.sp,
+                                            lineHeight = 7.sp
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "O'Reilly Media",
+                                        color = Color.Gray,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "¡Sorteo Activo!",
+                                        color = Color(0xFF669900),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Comenta abajo para participar por una copia física gratis de este libro.",
+                                        color = Color.DarkGray,
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2842,6 +4617,354 @@ fun AISpecialCameraActivity(viewModel: JellyBeanViewModel) {
 }
 
 @Composable
+fun AIGeneratorActivity(viewModel: JellyBeanViewModel) {
+    val prompt by viewModel.aiPrompt.collectAsState()
+    val size by viewModel.aiSelectedSize.collectAsState()
+    val ratio by viewModel.aiSelectedRatio.collectAsState()
+    val loading by viewModel.aiGenerating.collectAsState()
+    val errorMsg by viewModel.aiError.collectAsState()
+    val aiResult by viewModel.aiResult.collectAsState()
+
+    var showSavedMessage by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Creative Icon and Title Banner
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = Color(0xFF33B5E5),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "CREADOR DE IMÁGENES IA",
+                color = Color(0xFF33B5E5),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+        }
+
+        // Image Canvas Frame
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .background(Color(0xFF151515), RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFF2E2E32), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (loading) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        color = Color(0xFF33B5E5),
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Imaginando con IA...",
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.SansSerif
+                    )
+                }
+            } else if (errorMsg != null) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Error,
+                        contentDescription = "Error",
+                        tint = Color(0xFFFF4444),
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = errorMsg!!,
+                        color = Color(0xFFFF4444),
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else if (aiResult != null) {
+                Image(
+                    bitmap = aiResult!!.asImageBitmap(),
+                    contentDescription = "AI Generated Image",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        tint = Color.DarkGray,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "La obra de arte aparecerá aquí",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Actions if result exists
+        if (aiResult != null && !loading) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Set as Wallpaper
+                Button(
+                    onClick = {
+                        viewModel.setAsWallpaper(aiResult!!)
+                        viewModel.postNotification(
+                            "Creador IA",
+                            "Fondo de pantalla actualizado con tu imagen de IA",
+                            AppType.AI_GENERATOR
+                        )
+                        showSavedMessage = true
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF33B5E5)),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Wallpaper,
+                            contentDescription = null,
+                            tint = Color.Black,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Usar de Fondo", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Saved to Gallery confirmation / indicator
+                Button(
+                    onClick = { },
+                    enabled = false,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0x3399CC00),
+                        disabledContainerColor = Color(0x1199CC00)
+                    ),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF99CC00),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Guardado en Galería", color = Color(0xFF99CC00), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Reset Button
+                IconButton(
+                    onClick = {
+                        viewModel.clearAiResult()
+                        showSavedMessage = false
+                    },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Color(0xFF2E2E32), RoundedCornerShape(4.dp))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Nueva imagen",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        // Text input field for Prompt
+        Text(
+            text = "PROMPT DE LA IMAGEN",
+            color = Color.Gray,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Start)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        TextField(
+            value = prompt,
+            onValueChange = { viewModel.updateAiPrompt(it) },
+            placeholder = { Text("Escribe una descripción creativa (ej: Un astronauta retro en la luna)...", color = Color.Gray, fontSize = 12.sp) },
+            colors = TextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedContainerColor = Color(0xFF1D1D1D),
+                unfocusedContainerColor = Color(0xFF1D1D1D),
+                focusedIndicatorColor = Color(0xFF33B5E5),
+                unfocusedIndicatorColor = Color.DarkGray
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(4.dp),
+            singleLine = false,
+            maxLines = 3
+        )
+
+        // Configuration Row: Aspect Ratio
+        Text(
+            text = "RELACIÓN DE ASPECTO",
+            color = Color.Gray,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Start)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf("1:1", "16:9", "9:16", "4:3", "3:2").forEach { r ->
+                val active = ratio == r
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.setAiRatio(r) }
+                        .background(
+                            if (active) Color(0x3333B5E5) else Color(0xFF1D1D1D),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .border(
+                            1.dp,
+                            if (active) Color(0xFF33B5E5) else Color.DarkGray,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = r,
+                        color = if (active) Color(0xFF33B5E5) else Color.Gray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Configuration Row: Resolution Size
+        Text(
+            text = "RESOLUCIÓN MÁXIMA",
+            color = Color.Gray,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.Start)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf("512px", "1K", "2K").forEach { s ->
+                val active = size == s
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.setAiSize(s) }
+                        .background(
+                            if (active) Color(0x3333B5E5) else Color(0xFF1D1D1D),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .border(
+                            1.dp,
+                            if (active) Color(0xFF33B5E5) else Color.DarkGray,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = s,
+                        color = if (active) Color(0xFF33B5E5) else Color.Gray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Generate Action Button
+        Button(
+            onClick = { viewModel.generateAIImage() },
+            enabled = !loading && prompt.trim().isNotEmpty(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF33B5E5),
+                disabledContainerColor = Color(0xFF1D1D1D)
+            ),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = if (!loading && prompt.trim().isNotEmpty()) Color.Black else Color.Gray,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "GENERAR IMAGEN CON IA",
+                    color = if (!loading && prompt.trim().isNotEmpty()) Color.Black else Color.Gray,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun GalleryActivity(viewModel: JellyBeanViewModel) {
     val images by viewModel.galleryImages.collectAsState()
     var selectedImg by remember { mutableStateOf<Bitmap?>(null) }
@@ -2983,7 +5106,7 @@ fun CalculatorActivity(viewModel: JellyBeanViewModel) {
 }
 
 enum class SettingsOption {
-    WIFI, BRIGHTNESS, USERS, APPS, STORAGE, BATTERY, SCHEDULE, BACKUP, DATETIME, SECURITY, ACCESSIBILITY, ABOUT
+    WIFI, BRIGHTNESS, SOUND, USERS, APPS, STORAGE, BATTERY, SCHEDULE, BACKUP, DATETIME, SECURITY, ACCESSIBILITY, ABOUT
 }
 
 data class SettingsItem(
@@ -3053,6 +5176,28 @@ fun SettingsIconDraw(option: SettingsOption, modifier: Modifier = Modifier) {
                         cap = StrokeCap.Round
                     )
                 }
+            }
+            SettingsOption.SOUND -> {
+                val color = Color(0xFF33B5E5)
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(w * 0.25f, h * 0.38f)
+                    lineTo(w * 0.45f, h * 0.38f)
+                    lineTo(w * 0.65f, h * 0.2f)
+                    lineTo(w * 0.65f, h * 0.8f)
+                    lineTo(w * 0.45f, h * 0.62f)
+                    lineTo(w * 0.25f, h * 0.62f)
+                    close()
+                }
+                drawPath(path = path, color = color)
+                drawArc(
+                    color = color,
+                    startAngle = -45f,
+                    sweepAngle = 90f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.45f, h * 0.3f),
+                    size = Size(w * 0.35f, h * 0.4f),
+                    style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                )
             }
             SettingsOption.USERS -> {
                 val color = Color(0xFF7CB342)
@@ -3345,6 +5490,71 @@ fun SettingsOptionRow(
     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))
 }
 
+@Composable
+fun HoloSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .width(80.dp)
+            .height(28.dp)
+            .background(Color(0xFF1F1F1F), RoundedCornerShape(2.dp))
+            .border(1.5.dp, Color(0xFF444444), RoundedCornerShape(2.dp))
+            .clickable { onCheckedChange(!checked) }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (checked) {
+                // Left is active cyan slider
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(Color(0xFF33B5E5))
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("SÍ", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Box(
+                    modifier = Modifier
+                        .width(36.dp)
+                        .fillMaxHeight()
+                        .background(Color(0xFF3F3F3F)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("", color = Color.White, fontSize = 11.sp)
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .width(36.dp)
+                        .fillMaxHeight()
+                        .background(Color(0xFF3F3F3F)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("", color = Color.White, fontSize = 11.sp)
+                }
+                // Right is inactive dark gray slider
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(Color(0xFF121212))
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("NO", color = Color(0xFF666666), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsActivity(viewModel: JellyBeanViewModel) {
@@ -3372,10 +5582,12 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
     var aboutClickCount by remember { mutableIntStateOf(0) }
     var showResetDialog by remember { mutableStateOf(false) }
     var resettingProgress by remember { mutableStateOf(false) }
+    var selectedAppForInfo by remember { mutableStateOf<AppType?>(null) }
 
     val settingsItems = listOf(
         SettingsItem(SettingsOption.WIFI, "Wi-Fi y Redes", "Activar, simular redes inalámbricas", "wifi"),
         SettingsItem(SettingsOption.BRIGHTNESS, "Brillo y Pantalla", "Fondos, brillo de pantalla y rotación", "pantalla"),
+        SettingsItem(SettingsOption.SOUND, "Sonido y Volumen", "Efectos, tonos de llamada y multimedia", "sonido"),
         SettingsItem(SettingsOption.USERS, "Perfiles de Usuario", "Nombre del propietario y apodos", "perfiles"),
         SettingsItem(SettingsOption.APPS, "Aplicaciones y Notificaciones", "Ver espacio, desinstalar recursos", "apps"),
         SettingsItem(SettingsOption.STORAGE, "Almacenamiento del Dispositivo", "Comprobar memoria ocupada y de sistema", "almacenamiento"),
@@ -3404,7 +5616,13 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
         ) {
             if (screenState != "root") {
                 IconButton(
-                    onClick = { screenState = "root" },
+                    onClick = {
+                        if (screenState == "app_info") {
+                            screenState = "apps"
+                        } else {
+                            screenState = "root"
+                        }
+                    },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Atrás", tint = Color(0xFF33B5E5))
@@ -3416,8 +5634,10 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                     "root" -> "AJUSTES DEL SISTEMA"
                     "wifi" -> "WI-FI Y CONEXIONES"
                     "pantalla" -> "BRILLO Y PANTALLA"
+                    "sonido" -> "SONIDO Y VOLUMEN"
                     "perfiles" -> "PERFILES DE USUARIO"
                     "apps" -> "APLICACIONES"
+                    "app_info" -> "INFO. DE LA APLICACIÓN"
                     "almacenamiento" -> "ALMACENAMIENTO"
                     "bateria" -> "BATERÍA Y ENERGÍA"
                     "encendido" -> "ENCENDIDO PROGRAMADO"
@@ -3559,10 +5779,224 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                         }
                     }
                 }
+                "sonido" -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
+                    ) {
+                        Text("EFECTOS Y VOLUMEN DE SISTEMA", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // System Sounds switch
+                        val systemSoundsEnabled by viewModel.systemSoundsEnabled.collectAsState()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Sonidos del sistema (Touch Sounds)", color = Color.White, fontSize = 15.sp)
+                                Text("Reproducir sonidos nostálgicos al tocar botones", color = Color.Gray, fontSize = 12.sp)
+                            }
+                            HoloSwitch(
+                                checked = systemSoundsEnabled,
+                                onCheckedChange = { viewModel.setSystemSoundsEnabled(it) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        Text("CONTROLES DE VOLUMEN SIMULADOS", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Tono de llamada
+                        var ringtoneVol by remember { mutableStateOf(0.8f) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.VolumeUp, contentDescription = null, tint = Color.LightGray)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Volumen de tono de llamada", color = Color.White, fontSize = 14.sp)
+                                Slider(
+                                    value = ringtoneVol,
+                                    onValueChange = { ringtoneVol = it },
+                                    colors = SliderDefaults.colors(activeTrackColor = Color(0xFF33B5E5), thumbColor = Color(0xFF33B5E5))
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.playSystemSound("ringtone") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1F1F)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("PROBAR", color = Color(0xFF33B5E5), fontSize = 10.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Sonidos multimedia
+                        var mediaVol by remember { mutableStateOf(0.7f) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.MusicNote, contentDescription = null, tint = Color.LightGray)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Volumen multimedia (Juegos/Música)", color = Color.White, fontSize = 14.sp)
+                                Slider(
+                                    value = mediaVol,
+                                    onValueChange = { mediaVol = it },
+                                    colors = SliderDefaults.colors(activeTrackColor = Color(0xFF33B5E5), thumbColor = Color(0xFF33B5E5))
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.playSystemSound("multimedia") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1F1F)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("PROBAR", color = Color(0xFF33B5E5), fontSize = 10.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Notificaciones
+                        var notifVol by remember { mutableStateOf(0.6f) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.Notifications, contentDescription = null, tint = Color.LightGray)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Volumen de notificaciones", color = Color.White, fontSize = 14.sp)
+                                Slider(
+                                    value = notifVol,
+                                    onValueChange = { notifVol = it },
+                                    colors = SliderDefaults.colors(activeTrackColor = Color(0xFF33B5E5), thumbColor = Color(0xFF33B5E5))
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.playSystemSound("notification") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1F1F)),
+                                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                                shape = RoundedCornerShape(2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("PROBAR", color = Color(0xFF33B5E5), fontSize = 10.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        Text("MELODÍAS Y TONOS JELLY BEAN", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Ringtone selector dropdown
+                        val selectedRingtone by viewModel.selectedRingtone.collectAsState()
+                        var ringtoneMenuExpanded by remember { mutableStateOf(false) }
+                        val ringtoneList = listOf("Retro Holo Chime", "Andrómeda", "Jelly Bean Ring", "Sinfonía de 8 bits")
+
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text("Tono de llamada predeterminado", color = Color.White, fontSize = 14.sp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1E1E1E), RoundedCornerShape(2.dp))
+                                    .border(1.dp, Color.DarkGray, RoundedCornerShape(2.dp))
+                                    .clickable { ringtoneMenuExpanded = true }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(selectedRingtone, color = Color.White, fontSize = 14.sp)
+                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = Color(0xFF33B5E5))
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = ringtoneMenuExpanded,
+                                onDismissRequest = { ringtoneMenuExpanded = false },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.8f)
+                                    .background(Color(0xFF222222))
+                                    .border(1.dp, Color.DarkGray)
+                            ) {
+                                ringtoneList.forEach { rt ->
+                                    DropdownMenuItem(
+                                        text = { Text(rt, color = Color.White) },
+                                        onClick = {
+                                            viewModel.selectRingtone(rt)
+                                            ringtoneMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Notification Sound selector dropdown
+                        val selectedNotifSound by viewModel.selectedNotificationSound.collectAsState()
+                        var notifMenuExpanded by remember { mutableStateOf(false) }
+                        val notifSoundList = listOf("Simple Tick", "Jelly Bean Ack", "Double Beep", "Bubble Pop")
+
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text("Tono de notificación de sistema", color = Color.White, fontSize = 14.sp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1E1E1E), RoundedCornerShape(2.dp))
+                                    .border(1.dp, Color.DarkGray, RoundedCornerShape(2.dp))
+                                    .clickable { notifMenuExpanded = true }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(selectedNotifSound, color = Color.White, fontSize = 14.sp)
+                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = Color(0xFF33B5E5))
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = notifMenuExpanded,
+                                onDismissRequest = { notifMenuExpanded = false },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.8f)
+                                    .background(Color(0xFF222222))
+                                    .border(1.dp, Color.DarkGray)
+                            ) {
+                                notifSoundList.forEach { ns ->
+                                    DropdownMenuItem(
+                                        text = { Text(ns, color = Color.White) },
+                                        onClick = {
+                                            viewModel.selectNotificationSound(ns)
+                                            notifMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 "pantalla" -> {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
                             .padding(16.dp)
                     ) {
                         Text("CONTROL DE BRILLO", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -3604,6 +6038,25 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                         }
 
                         Spacer(modifier = Modifier.height(24.dp))
+
+                        // Vintage Dark Mode Toggle
+                        val darkModeEnabled by viewModel.darkModeEnabled.collectAsState()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Modo Oscuro (Holo Dark)", color = Color.White, fontSize = 15.sp)
+                                Text("Ahorra energía e intensifica el negro de fondo", color = Color.Gray, fontSize = 12.sp)
+                            }
+                            HoloSwitch(
+                                checked = darkModeEnabled,
+                                onCheckedChange = { viewModel.setDarkModeEnabled(it) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
                         Text("PALETA DE COLOR HOLO (TINTA DE INTERFAZ)", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(12.dp))
                         
@@ -3625,6 +6078,154 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                                             )
                                         }
                                 )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(28.dp))
+                        Text("SELECCIÓN DE FONDO DE PANTALLA", color = Color(0xFF33B5E5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val wallpaperOptions = listOf(
+                            Triple("WAVES", "Ondas Holo (Clásico)", "Ondas dinámicas de la era original"),
+                            Triple("SOLID", "Holo Sólido", "Azul carbón oscuro minimalista"),
+                            Triple("SOLID_BLACK", "Negro Puro", "Fondo negro sólido para ahorrar batería"),
+                            Triple("GRADIENT", "Holo Degradado", "Degradado vertical de azul a negro"),
+                            Triple("NEXUS", "Mosaico Nexus", "Cuadrículas y mosaicos de luz de Nexus")
+                        )
+
+                        val activePreset by viewModel.wallpaperPreset.collectAsState()
+                        val customBmp by viewModel.wallpaperSelected.collectAsState()
+
+                        if (customBmp != null) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0x3333B5E5)),
+                                border = BorderStroke(1.5.dp, Color(0xFF33B5E5)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Image(
+                                            bitmap = customBmp!!.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(50.dp, 75.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .border(1.dp, Color.White, RoundedCornerShape(4.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Column {
+                                            Text("Fondo de Galería", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Text("Imagen seleccionada del usuario", color = Color.LightGray, fontSize = 11.sp)
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { viewModel.setWallpaperPreset("WAVES") },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4444)),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text("Quitar", color = Color.White, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        wallpaperOptions.forEach { (presetKey, presetTitle, presetDesc) ->
+                            val isSelected = customBmp == null && activePreset == presetKey
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clickable {
+                                        viewModel.setWallpaperPreset(presetKey)
+                                        viewModel.postNotification(
+                                            "Ajustes del Sistema",
+                                            "Fondo de pantalla cambiado a: $presetTitle",
+                                            AppType.SETTINGS
+                                        )
+                                    },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) Color(0x2233B5E5) else Color(0x11FFFFFF)
+                                ),
+                                border = BorderStroke(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) Color(0xFF33B5E5) else Color(0xFF2E2E32)
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(50.dp, 75.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                    ) {
+                                        when (presetKey) {
+                                            "SOLID" -> {
+                                                Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F1219)))
+                                            }
+                                            "SOLID_BLACK" -> {
+                                                Box(modifier = Modifier.fillMaxSize().background(Color(0xFF000000)))
+                                            }
+                                            "GRADIENT" -> {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(
+                                                            Brush.verticalGradient(
+                                                                colors = listOf(Color(0xFF0F1826), Color(0xFF000000))
+                                                            )
+                                                        )
+                                                )
+                                            }
+                                            "NEXUS" -> {
+                                                NexusMosaicWallpaper(modifier = Modifier.fillMaxSize())
+                                            }
+                                            else -> {
+                                                val themeColorProfile by viewModel.themeColorProfile.collectAsState()
+                                                JellyBeanWaveWallpaper(themeProfile = themeColorProfile, modifier = Modifier.fillMaxSize())
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(16.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = presetTitle, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                        Text(text = presetDesc, color = Color.Gray, fontSize = 11.sp)
+                                    }
+
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = {
+                                            viewModel.setWallpaperPreset(presetKey)
+                                            viewModel.postNotification(
+                                                "Ajustes del Sistema",
+                                                "Fondo de pantalla cambiado a: $presetTitle",
+                                                AppType.SETTINGS
+                                            )
+                                        },
+                                        colors = RadioButtonDefaults.colors(
+                                            selectedColor = Color(0xFF33B5E5),
+                                            unselectedColor = Color.Gray
+                                        )
+                                    )
+                                }
                             }
                         }
                     }
@@ -3696,7 +6297,14 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 10.dp),
+                                    .holoTap(
+                                        shape = RoundedCornerShape(4.dp),
+                                        onClick = {
+                                            selectedAppForInfo = app
+                                            screenState = "app_info"
+                                        }
+                                    )
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -3735,6 +6343,242 @@ fun SettingsActivity(viewModel: JellyBeanViewModel) {
                                 }
                             }
                             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+                        }
+                    }
+                }
+                "app_info" -> {
+                    val app = selectedAppForInfo
+                    if (app != null) {
+                        val installedApps by viewModel.installedApps.collectAsState()
+                        val alreadyInstalled = installedApps.contains(app)
+                        var isForceStopped by remember(app) { mutableStateOf(false) }
+                        var appDataCleared by remember(app) { mutableStateOf(false) }
+                        var appCacheCleared by remember(app) { mutableStateOf(false) }
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp)
+                        ) {
+                            // Header with Icon, Name, Version
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+                            ) {
+                                JellyBeanAppIcon(app = app, modifier = Modifier.size(52.dp))
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column {
+                                    Text(app.appName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    Text("versión 1.2.${app.name.length}", color = Color.Gray, fontSize = 12.sp)
+                                }
+                            }
+
+                            // Force Stop and Uninstall Buttons Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        isForceStopped = true
+                                        viewModel.postNotification(
+                                            "Ajustes",
+                                            "Se forzó la detención de ${app.appName}",
+                                            AppType.SETTINGS
+                                        )
+                                        viewModel.playSystemSound("click")
+                                    },
+                                    enabled = !isForceStopped,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF252528),
+                                        disabledContainerColor = Color(0xFF161618)
+                                    ),
+                                    border = BorderStroke(1.dp, if (isForceStopped) Color.DarkGray else Color.Gray),
+                                    shape = RoundedCornerShape(4.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        "Forzar detención",
+                                        color = if (isForceStopped) Color.DarkGray else Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                if (app != AppType.ABOUT && app != AppType.SETTINGS) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.playSystemSound("click")
+                                            if (alreadyInstalled) {
+                                                viewModel.uninstallAppInStore(app)
+                                                screenState = "apps"
+                                            } else {
+                                                viewModel.installAppInStore(app)
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF252528)),
+                                        border = BorderStroke(1.dp, Color.Gray),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            if (alreadyInstalled) "Desinstalar" else "Instalar",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = {},
+                                        enabled = false,
+                                        colors = ButtonDefaults.buttonColors(disabledContainerColor = Color(0xFF161618)),
+                                        border = BorderStroke(1.dp, Color.DarkGray),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Desactivar", color = Color.DarkGray, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            // Almacenamiento Section
+                            Text(
+                                "ALMACENAMIENTO",
+                                color = Color(0xFF33B5E5),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F12)),
+                                border = BorderStroke(1.dp, Color(0xFF222226)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    val appSize = (app.name.length * 1.4f).coerceAtLeast(2.4f)
+                                    val dataSize = if (appDataCleared) 0.0f else (app.appName.length * 0.3f).coerceAtLeast(0.8f)
+                                    val totalSize = appSize + dataSize
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text("Total", color = Color.White, fontSize = 13.sp)
+                                        Text(String.format(Locale.US, "%.2f MB", totalSize), color = Color.White, fontSize = 13.sp)
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text("Aplicación", color = Color.Gray, fontSize = 12.sp)
+                                        Text(String.format(Locale.US, "%.2f MB", appSize), color = Color.Gray, fontSize = 12.sp)
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text("Datos de la app", color = Color.Gray, fontSize = 12.sp)
+                                        Text(String.format(Locale.US, "%.2f MB", dataSize), color = Color.Gray, fontSize = 12.sp)
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Button(
+                                        onClick = {
+                                            appDataCleared = true
+                                            viewModel.playSystemSound("click")
+                                        },
+                                        enabled = !appDataCleared,
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1F24)),
+                                        border = BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text("Borrar datos", color = if (appDataCleared) Color.Gray else Color.White, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            // Cache Section
+                            Text(
+                                "CACHÉ",
+                                color = Color(0xFF33B5E5),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F12)),
+                                border = BorderStroke(1.dp, Color(0xFF222226)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    val cacheSize = if (appCacheCleared) 0 else (app.appName.length * 16 + 12)
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text("Caché", color = Color.White, fontSize = 13.sp)
+                                        Text("${cacheSize} KB", color = Color.White, fontSize = 13.sp)
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Button(
+                                        onClick = {
+                                            appCacheCleared = true
+                                            viewModel.playSystemSound("click")
+                                        },
+                                        enabled = !appCacheCleared,
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1F24)),
+                                        border = BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text("Borrar caché", color = if (appCacheCleared) Color.Gray else Color.White, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            // Permisos Section
+                            Text(
+                                "PERMISOS DE LA APLICACIÓN",
+                                color = Color(0xFF33B5E5),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F12)),
+                                border = BorderStroke(1.dp, Color(0xFF222226)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    val permissions = when (app) {
+                                        AppType.CAMERA -> listOf("Acceso a Cámara de Fotos", "Almacenamiento Local")
+                                        AppType.MUSIC -> listOf("Acceso a Red / Internet", "Almacenamiento Local")
+                                        AppType.AI_GENERATOR -> listOf("Acceso a Red / Internet", "Almacenamiento Local")
+                                        AppType.SOUND_RECORDER -> listOf("Acceso a Micrófono de Sistema", "Almacenamiento Local")
+                                         AppType.DOWNLOADS -> listOf("Acceso a Red / Internet", "Almacenamiento Local")
+                                        AppType.BROWSER -> listOf("Acceso a Red / Internet")
+                                        AppType.SETTINGS -> listOf("Configuración del Sistema", "Modificar Estado de Red")
+                                        else -> listOf("Almacenamiento Local")
+                                    }
+
+                                    permissions.forEach { perm ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier.size(6.dp).background(Color(0xFF33B5E5), CircleShape)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(perm, color = Color.LightGray, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -4306,65 +7150,324 @@ fun RetroMapsActivity(viewModel: JellyBeanViewModel) {
 @Composable
 fun RetroMarketActivity(viewModel: JellyBeanViewModel) {
     val installedApps by viewModel.installedApps.collectAsState()
-    val playStoreRecommendations = listOf(
-        AppType.MAPS to "Consigue cartografía GPS.",
-        AppType.PHONE to "Marcador de llamadas clásica.",
-        AppType.BROWSER to "Navega Google Search retro.",
-        AppType.CALCULATOR to "Hacer cuentas de forma fácil.",
-        AppType.CAMERA to "Carrete fotográfico por IA."
+    
+    val storeApps = listOf(
+        Triple(AppType.MAPS, "Maps", "Consigue cartografía GPS."),
+        Triple(AppType.PHONE, "Dialer", "Marcador de llamadas clásica."),
+        Triple(AppType.BROWSER, "Navegador", "Navega Google Search retro."),
+        Triple(AppType.CALCULATOR, "Calculadora", "Hacer cuentas de forma fácil."),
+        Triple(AppType.CAMERA, "Cámara IA", "Carrete fotográfico por IA."),
+        Triple(AppType.MUSIC, "Música", "Reproductor Retro."),
+        Triple(AppType.CLOCK, "Reloj", "Alarma y cronómetro."),
+        Triple(AppType.AI_GENERATOR, "Creador IA", "Genera imágenes increíbles usando Inteligencia Artificial.")
     )
 
-    Column(modifier = Modifier.fillMaxSize().padding(14.dp)) {
-        Text(
-            text = "Aplicaciones Recomendadas",
-            color = Color(0xFF99CC00),
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
+    var selectedCategory by remember { mutableStateOf("Apps") }
+    var appToDetail by remember { mutableStateOf<Triple<AppType, String, String>?>(null) }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(playStoreRecommendations) { item ->
-                val alreadyInstalled = installedApps.contains(item.first)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF151515))
+    ) {
+        // Play Store Header Bar (Image 7 style)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF222222))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Play store bag icon drawing
+                Canvas(modifier = Modifier.size(26.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    val handlePath = Path().apply {
+                        moveTo(w * 0.35f, h * 0.35f)
+                        quadraticTo(w * 0.5f, h * 0.05f, w * 0.65f, h * 0.35f)
+                    }
+                    drawPath(
+                        path = handlePath,
+                        color = Color.White,
+                        style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x19FFFFFF)),
-                    border = BorderStroke(1.dp, Color(0x33FFFFFF))
+                    val bagPath = Path().apply {
+                        moveTo(w * 0.16f, h * 0.32f)
+                        lineTo(w * 0.84f, h * 0.32f)
+                        lineTo(w * 0.88f, h * 0.92f)
+                        lineTo(w * 0.12f, h * 0.92f)
+                        close()
+                    }
+                    drawPath(path = bagPath, color = Color.White)
+
+                    val playPath = Path().apply {
+                        moveTo(w * 0.4f, h * 0.48f)
+                        lineTo(w * 0.65f, h * 0.62f)
+                        lineTo(w * 0.4f, h * 0.76f)
+                        close()
+                    }
+                    drawPath(
+                        path = playPath,
+                        brush = Brush.linearGradient(
+                            colors = listOf(Color(0xFF00E5FF), Color(0xFFFF4444))
+                        )
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Google Play",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Normal,
+                    fontFamily = FontFamily.SansSerif
+                )
+            }
+            
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Buscar",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "Menu",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        // Top Banner Area (Diagonal Carbon Texture / Multi-color gradient)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(115.dp)
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF333333), Color(0xFF1E1E1E))
+                    )
+                )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "7 DAYS TO PLAY",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontStyle = FontStyle.Italic
+                    )
+                    Text(
+                        text = "New 25¢ Deals Every Day",
+                        color = Color(0xFF99CC00),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                // Now 41 CD Art representation
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFFE04000))
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(4.dp)
                     ) {
-                        Box(
+                        Text(
+                            text = "NOW",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "41",
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                }
+            }
+        }
+
+        // Split view - Categories left, recommendations right
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Left list of categories
+            Column(
+                modifier = Modifier
+                    .weight(1.2f)
+                    .fillMaxHeight()
+                    .background(Color(0xFF222222))
+                    .padding(vertical = 4.dp)
+            ) {
+                val categories = listOf(
+                    "Apps" to Color(0xFF6E6E72),
+                    "Games" to Color(0xFF99CC00),
+                    "Music" to Color(0xFFFFBB33),
+                    "Books" to Color(0xFF0099CC),
+                    "Movies" to Color(0xFFFF4444)
+                )
+
+                categories.forEach { (cat, color) ->
+                    val isSelected = selectedCategory == cat
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedCategory = cat }
+                            .background(if (isSelected) Color(0xFF2E2E2E) else Color.Transparent)
+                            .padding(horizontal = 10.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Left indicator color block
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 4.dp, height = 24.dp)
+                                    .background(color)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = cat,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                        Text(
+                            text = ">",
+                            color = Color.DarkGray,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Divider(color = Color(0xFF151515), thickness = 1.dp)
+                }
+            }
+
+            // Right side grid/list (Featured contents)
+            Column(
+                modifier = Modifier
+                    .weight(1.8f)
+                    .fillMaxHeight()
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = "Play 49¢ Apps & Games",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(storeApps) { appTriple ->
+                        val isInstalled = installedApps.contains(appTriple.first)
+                        Row(
                             modifier = Modifier
-                                .size(40.dp)
-                                .background(Color(0xFF33B5E5).copy(alpha = 0.2f), CircleShape),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF282828))
+                                .border(0.5.dp, Color.White.copy(alpha = 0.1f))
+                                .clickable { appToDetail = appTriple }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(imageVector = Icons.Default.Apps, contentDescription = null, tint = Color(0xFF33B5E5))
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(text = item.first.appName, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            Text(text = item.second, color = Color.Gray, fontSize = 11.sp)
-                        }
-                        Button(
-                            onClick = {
-                                if (alreadyInstalled) {
-                                    viewModel.uninstallAppInStore(item.first)
-                                } else {
-                                    viewModel.installAppInStore(item.first)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = if (alreadyInstalled) Color(0xFFCC0000) else Color(0xFF669900))
-                        ) {
-                            Text(text = if (alreadyInstalled) "Quitar" else "Instalar", color = Color.White, fontSize = 11.sp)
+                            JellyBeanAppIcon(app = appTriple.first, modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = appTriple.second,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (isInstalled) "Instalado" else "Disponible",
+                                    color = if (isInstalled) Color(0xFF99CC00) else Color.LightGray,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Text(
+                                text = "49¢",
+                                color = Color(0xFF99CC00),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    // Modal popup detail dialog
+    appToDetail?.let { appTriple ->
+        val alreadyInstalled = installedApps.contains(appTriple.first)
+        AlertDialog(
+            onDismissRequest = { appToDetail = null },
+            containerColor = Color(0xFF222222),
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    JellyBeanAppIcon(app = appTriple.first, modifier = Modifier.size(40.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(text = appTriple.second, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column {
+                    Text(text = appTriple.third, color = Color.LightGray, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = "Desarrollador: Google Inc.", color = Color.Gray, fontSize = 11.sp)
+                    Text(text = "Precio: 49¢ (Oferta Jelly Bean)", color = Color(0xFF99CC00), fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (alreadyInstalled) {
+                            viewModel.uninstallAppInStore(appTriple.first)
+                        } else {
+                            viewModel.installAppInStore(appTriple.first)
+                        }
+                        appToDetail = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (alreadyInstalled) Color(0xFFCC0000) else Color(0xFF669900))
+                ) {
+                    Text(text = if (alreadyInstalled) "Quitar" else "Instalar", color = Color.White)
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { appToDetail = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                ) {
+                    Text(text = "Cancelar", color = Color.White)
+                }
+            }
+        )
     }
 }
 
@@ -4581,6 +7684,446 @@ fun AboutJellyBeanActivity(viewModel: JellyBeanViewModel) {
     }
 }
 
+@Composable
+fun FileManagerActivity(viewModel: JellyBeanViewModel) {
+    var currentFolder by remember { mutableStateOf("sdcard0") }
+    var selectedFileDetails by remember { mutableStateOf<String?>(null) }
+
+    val rootFolders = listOf("DCIM", "Descargas", "Música", "Fotos", "Documentos", "Sistema")
+    val folderContents = mapOf(
+        "DCIM" to listOf(
+            "IMG_20120713_082215.jpg" to "Imagen JPEG - 1.2 MB",
+            "VID_20120715_193102.mp4" to "Video MPEG4 - 15.4 MB"
+        ),
+        "Descargas" to listOf(
+            "jellybean_wallpaper.png" to "Imagen PNG - 845 KB",
+            "playstore_update.apk" to "Paquete de Android - 4.1 MB",
+            "reporte_trimestre.pdf" to "Documento PDF - 1.2 MB"
+        ),
+        "Música" to listOf(
+            "01_jelly_bean_groove.mp3" to "Audio MP3 - 5.1 MB",
+            "android_4.1_system_ringtone.mp3" to "Audio MP3 - 1.8 MB"
+        ),
+        "Fotos" to listOf(
+            "retro_nexus_4.jpg" to "Imagen JPEG - 2.1 MB",
+            "holo_blue_palette.png" to "Imagen PNG - 512 KB"
+        ),
+        "Documentos" to listOf(
+            "guia_retro_nexus.txt" to "Archivo de texto - 12 KB",
+            "nota_asistente.txt" to "Archivo de texto - 4 KB"
+        ),
+        "Sistema" to listOf(
+            "build.prop" to "Archivo de configuración - 8 KB",
+            "hosts" to "Archivo de hosts - 2 KB"
+        )
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF1E1E1E))
+    ) {
+        // App title/header bar (retro Jelly Bean grey theme)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF333333))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = Color(0xFF33B5E5),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Gestor de archivos",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Breadcrumbs & Navigation Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF262626))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (currentFolder != "sdcard0") {
+                IconButton(
+                    onClick = { currentFolder = "sdcard0" },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Regresar",
+                        tint = Color.LightGray
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+
+            Text(
+                text = "sdcard0" + if (currentFolder != "sdcard0") "  >  $currentFolder" else "",
+                color = Color(0xFF33B5E5),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Divider(color = Color(0xFF141414), thickness = 1.dp)
+
+        // Contents
+        if (currentFolder == "sdcard0") {
+            // Root Folders
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                items(rootFolders) { folder ->
+                    val fileCount = folderContents[folder]?.size ?: 0
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { currentFolder = folder }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = "Carpeta",
+                            tint = Color(0xFF33B5E5),
+                            modifier = Modifier.size(38.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = folder,
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "$fileCount elementos",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                    Divider(color = Color(0xFF2D2D2D), thickness = 0.5.dp)
+                }
+            }
+        } else {
+            // Subfolder contents
+            val files = folderContents[currentFolder] ?: emptyList()
+            if (files.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Carpeta vacía", color = Color.Gray, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    items(files) { (fileName, fileDesc) ->
+                        val icon = when {
+                            fileName.endsWith(".mp3") -> Icons.Default.AudioFile
+                            fileName.endsWith(".jpg") || fileName.endsWith(".png") -> Icons.Default.Image
+                            fileName.endsWith(".apk") -> Icons.Default.Android
+                            else -> Icons.Default.Description
+                        }
+                        
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedFileDetails = "$fileName\n$fileDesc" }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = "Archivo",
+                                tint = Color(0xFF99CC00),
+                                modifier = Modifier.size(34.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = fileName,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = fileDesc,
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                        Divider(color = Color(0xFF2D2D2D), thickness = 0.5.dp)
+                    }
+                }
+            }
+        }
+
+        // Simulated Storage Stats bar at bottom
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF2E2E2E))
+                .padding(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Almacenamiento interno", color = Color.LightGray, fontSize = 12.sp)
+                Text("11.2 GB / 16.0 GB libres", color = Color.LightGray, fontSize = 12.sp)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { 0.3f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = Color(0xFF33B5E5),
+                trackColor = Color(0xFF151515)
+            )
+        }
+    }
+
+    // Details alert dialog
+    if (selectedFileDetails != null) {
+        AlertDialog(
+            onDismissRequest = { selectedFileDetails = null },
+            containerColor = Color(0xFF2C2C2C),
+            title = {
+                Text(text = "Propiedades de archivo", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(text = selectedFileDetails ?: "", color = Color.LightGray, fontSize = 14.sp)
+            },
+            confirmButton = {
+                Button(
+                    onClick = { selectedFileDetails = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF33B5E5))
+                ) {
+                    Text(text = "Aceptar", color = Color.White)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun ThemesActivity(viewModel: JellyBeanViewModel) {
+    val currentTheme by viewModel.themeColorProfile.collectAsState()
+
+    val themes = listOf(
+        Triple("BLUE", "Holo Azul Clásico", Color(0xFF33B5E5)),
+        Triple("PURPLE", "Holo Violeta Aura", Color(0xFFBA68C8)),
+        Triple("GREEN", "Holo Esmeralda", Color(0xFF99CC00)),
+        Triple("RED", "Holo Carmesí", Color(0xFFFF4444)),
+        Triple("AMBER", "Holo Atardecer", Color(0xFFFFBB33))
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF161616))
+    ) {
+        // Theme title header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF222222))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Palette,
+                contentDescription = null,
+                tint = Color(0xFF33B5E5),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Personalización Holo",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Header explanatory banner
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF2D2D2D))
+                .padding(14.dp)
+        ) {
+            Text(
+                text = "Cambia el perfil de color del sistema. Afectará las ondas dinámicas del fondo, los elementos activos y el estilo general.",
+                color = Color.LightGray,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Themes Lists
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(themes) { (profileKey, profileName, accentColor) ->
+                val isSelected = currentTheme == profileKey
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.setThemeColorProfile(profileKey) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSelected) Color(0x33333333) else Color(0x19FFFFFF)
+                    ),
+                    border = BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) accentColor else Color.DarkGray
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            colors = listOf(accentColor, accentColor.copy(alpha = 0.2f))
+                                        )
+                                    )
+                                    .border(1.5.dp, Color.White, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = profileName,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Estilo Holo " + profileKey.lowercase().replaceFirstChar { it.uppercase() },
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Seleccionado",
+                                tint = accentColor,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Live interactive widget preview card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF222222)),
+            shape = RoundedCornerShape(6.dp),
+            border = BorderStroke(1.dp, Color.DarkGray)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "Vista previa interactiva",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                val currentAccent = themes.find { it.first == currentTheme }?.third ?: Color(0xFF33B5E5)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Activar Bluetooth", color = Color.White, fontSize = 13.sp)
+                    Switch(
+                        checked = true,
+                        onCheckedChange = {},
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = currentAccent,
+                            checkedTrackColor = currentAccent.copy(alpha = 0.3f)
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = {},
+                        colors = ButtonDefaults.buttonColors(containerColor = currentAccent),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("Acción primaria", color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(currentAccent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("✔", color = Color.White, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
 fun Modifier.scaleAnimation(onHold: () -> Unit) = this.pointerInput(Unit) {
     detectDragGestures(
         onDrag = { _, _ -> },
@@ -4602,44 +8145,206 @@ fun SoftNavigationKeys(viewModel: JellyBeanViewModel) {
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = {
-            viewModel.closeGoogleFolder()
-            val isDrawerOpen = viewModel.isDrawerOpen.value
-            val isShadeOpen = viewModel.isNotificationShadeOpen.value
-            val activeApp = viewModel.activeApp.value
+        // Soft Key: Back
+        Box(
+            modifier = Modifier
+                .size(72.dp, 44.dp)
+                .holoTap(
+                    shape = RoundedCornerShape(6.dp),
+                    onClick = {
+                        viewModel.closeGoogleFolder()
+                        val isDrawerOpen = viewModel.isDrawerOpen.value
+                        val isShadeOpen = viewModel.isNotificationShadeOpen.value
+                        val activeApp = viewModel.activeApp.value
 
-            if (isShadeOpen) {
-                viewModel.toggleNotificationShade()
-            } else if (isDrawerOpen) {
-                viewModel.closeDrawer()
-            } else if (activeApp != null) {
-                viewModel.closeActiveApp()
-            }
-        }) {
+                        if (isShadeOpen) {
+                            viewModel.toggleNotificationShade()
+                        } else if (isDrawerOpen) {
+                            viewModel.closeDrawer()
+                        } else if (activeApp != null) {
+                            viewModel.closeActiveApp()
+                        }
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
                 imageVector = Icons.Default.Reply,
                 contentDescription = "Soft key Back",
-                tint = Color(0xFF666666),
-                modifier = Modifier.size(24.dp)
-            )
-        }
-
-        IconButton(onClick = { viewModel.goHome() }) {
-            Icon(
-                imageVector = Icons.Default.Home,
-                contentDescription = "Soft key Home",
-                tint = Color(0xFF666666),
+                tint = Color(0xFFDCDCDC),
                 modifier = Modifier.size(26.dp)
             )
         }
 
-        IconButton(onClick = { viewModel.toggleRecentApps() }) {
+        // Soft Key: Home
+        Box(
+            modifier = Modifier
+                .size(72.dp, 44.dp)
+                .holoTap(
+                    shape = RoundedCornerShape(6.dp),
+                    onClick = { viewModel.goHome() }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
-                imageVector = Icons.Default.AspectRatio,
-                contentDescription = "Soft key Recents layout switcher",
-                tint = Color(0xFF666666),
-                modifier = Modifier.size(24.dp)
+                imageVector = Icons.Default.Home,
+                contentDescription = "Soft key Home",
+                tint = Color(0xFFDCDCDC),
+                modifier = Modifier.size(28.dp)
             )
+        }
+
+        // Soft Key: Recents (Overlapping dual-squares mimicry)
+        Box(
+            modifier = Modifier
+                .size(72.dp, 44.dp)
+                .holoTap(
+                    shape = RoundedCornerShape(6.dp),
+                    onClick = { viewModel.toggleRecentApps() }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.ContentCopy,
+                contentDescription = "Soft key Recents layout switcher",
+                tint = Color(0xFFDCDCDC),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun RecentAppCard(
+    app: AppType,
+    onLaunch: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var offsetX by remember { mutableStateOf(0f) }
+    val animatedOffsetX by animateFloatAsState(targetValue = offsetX)
+    val alpha = (1f - (Math.abs(animatedOffsetX) / 320f)).coerceIn(0f, 1f)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset { IntOffset(animatedOffsetX.toInt(), 0) }
+            .graphicsLayer(alpha = alpha)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragEnd = {
+                        if (Math.abs(offsetX) > 130f) {
+                            offsetX = if (offsetX > 0) 450f else -450f
+                            onDismiss()
+                        } else {
+                            offsetX = 0f
+                        }
+                    },
+                    onDragCancel = {
+                        offsetX = 0f
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        offsetX += dragAmount.x
+                    }
+                )
+            }
+    ) {
+        Card(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .width(280.dp)
+                .height(115.dp)
+                .clickable { onLaunch() },
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF16161B)),
+            border = BorderStroke(1.dp, Color(0xFF33B5E5).copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0C0C0F))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    JellyBeanAppIcon(
+                        app = app,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = app.appName.uppercase(),
+                        color = Color(0xFF33B5E5),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Cerrar",
+                        tint = Color.Gray,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable { onDismiss() }
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color(0xFF0F0F12))
+                        .padding(10.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color(0xFF33B5E5).copy(alpha = 0.1f), RoundedCornerShape(3.dp))
+                                .border(0.5.dp, Color(0xFF33B5E5).copy(alpha = 0.4f), RoundedCornerShape(3.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = when (app) {
+                                    AppType.CLOCK -> Icons.Default.Schedule
+                                    AppType.CAMERA -> Icons.Default.CameraAlt
+                                    AppType.BROWSER -> Icons.Default.Language
+                                    AppType.SETTINGS -> Icons.Default.Settings
+                                    AppType.MUSIC -> Icons.Default.MusicNote
+                                    AppType.AI_GENERATOR -> Icons.Default.AutoAwesome
+                                    AppType.SOUND_RECORDER -> Icons.Default.Mic
+                                    AppType.DOWNLOADS -> Icons.Default.CloudDownload
+                                    else -> Icons.Default.Apps
+                                },
+                                contentDescription = null,
+                                tint = Color(0xFF33B5E5),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                text = "Instancia Activa",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "ID Proceso: ${app.name.hashCode().coerceAtLeast(1000) % 99999}",
+                                color = Color.Gray,
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -4651,77 +8356,91 @@ fun RecentAppsOverlay(viewModel: JellyBeanViewModel) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xE0050505))
-            .clickable { viewModel.toggleRecentApps() }
+            .background(Color.Black.copy(alpha = 0.75f))
+            .clickable { viewModel.toggleRecentApps() },
+        contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier
+                .width(320.dp)
                 .fillMaxHeight()
-                .width(260.dp)
-                .background(Color(0xFA0C0C0F))
-                .border(BorderStroke(1.dp, Color(0xFF33B5E5)))
-                .padding(14.dp)
-                .clickable(enabled = false) {}
+                .padding(vertical = 48.dp)
+                .clickable(enabled = false) {}, // prevent click-through
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Recientes:",
+                text = "APLICACIONES RECIENTES",
                 color = Color(0xFF33B5E5),
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.5.sp,
+                modifier = Modifier.padding(bottom = 16.dp)
             )
 
             if (recents.isEmpty()) {
-                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text(text = "No hay apps abiertas recientemente.", color = Color.Gray, fontSize = 12.sp)
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Apps,
+                            contentDescription = null,
+                            tint = Color.DarkGray,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "No hay aplicaciones recientes",
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    items(recents) { app ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.launchApp(app) },
-                            colors = CardDefaults.cardColors(containerColor = Color(0x33FFFFFF)),
-                            border = BorderStroke(1.dp, Color(0x1AFFFFFF))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .background(Color(0xFF33B5E5).copy(alpha = 0.2f), CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color(0xFF33B5E5), modifier = Modifier.size(16.dp))
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = app.appName,
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = { viewModel.removeRecentApp(app) }) {
-                                    Icon(imageVector = Icons.Default.Close, contentDescription = "Borrar", tint = Color.Gray, modifier = Modifier.size(14.dp))
-                                }
+                    items(recents, key = { it.name }) { app ->
+                        RecentAppCard(
+                            app = app,
+                            onLaunch = {
+                                viewModel.launchApp(app)
+                                viewModel.toggleRecentApps()
+                            },
+                            onDismiss = {
+                                viewModel.removeRecentApp(app)
+                                viewModel.playSystemSound("click")
                             }
-                        }
+                        )
                     }
                 }
 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Clear all button styled in classic Holo red/gray
                 Button(
-                    onClick = { viewModel.clearRecentApps() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E0909)),
-                    modifier = Modifier.fillMaxWidth()
+                    onClick = {
+                        viewModel.clearRecentApps()
+                        viewModel.playSystemSound("click")
+                        viewModel.toggleRecentApps()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1010)),
+                    border = BorderStroke(1.dp, Color(0xFFFF4444).copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(2.dp),
+                    modifier = Modifier.fillMaxWidth(0.8f)
                 ) {
-                    Text(text = "Cerrar Todas", color = Color.Red, fontSize = 12.sp)
+                    Text(
+                        text = "CERRAR TODAS",
+                        color = Color(0xFFFF4444),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
                 }
             }
         }
@@ -4733,7 +8452,7 @@ fun DesktopIconItem(app: AppType, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clickable { onClick() }
+            .holoTap(shape = RoundedCornerShape(8.dp), onClick = onClick)
             .padding(8.dp)
     ) {
         JellyBeanAppIcon(
@@ -4751,14 +8470,64 @@ fun DesktopIconItem(app: AppType, onClick: () -> Unit) {
 }
 
 @Composable
-fun DockIconItem(app: AppType, onClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }
+fun AnimatedDockItemContainer(
+    onClick: () -> Unit,
+    content: @Composable BoxScope.(isPressed: Boolean) -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 1.22f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "dock_scale"
+    )
+    val glowAlpha by animateFloatAsState(
+        targetValue = if (isPressed) 0.65f else 0.0f,
+        animationSpec = tween(durationMillis = 80),
+        label = "dock_glow"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null, // Disable default ripple
+                onClick = onClick
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .size(62.dp)
     ) {
+        // Holo blue radial glow behind the icon when pressed
+        if (glowAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .drawBehind {
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color(0xFF33B5E5).copy(alpha = glowAlpha), Color.Transparent),
+                                center = Offset(size.width / 2f, size.height / 2f),
+                                radius = size.width / 1.5f
+                            )
+                        )
+                    }
+            )
+        }
+
+        content(isPressed)
+    }
+}
+
+@Composable
+fun DockIconItem(app: AppType, onClick: () -> Unit) {
+    AnimatedDockItemContainer(onClick = onClick) { isPressed ->
         JellyBeanAppIcon(
             app = app,
-            modifier = Modifier.size(54.dp)
+            modifier = Modifier.size(52.dp)
         )
     }
 }
@@ -4771,12 +8540,65 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 modifier = modifier.size(54.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_phone_icon),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // Shadow
+                    drawContext.canvas.save()
+                    drawContext.canvas.translate(2.dp.toPx(), 2.dp.toPx())
+                    val shadowHandsetPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.20f, h * 0.24f)
+                        quadraticTo(w * 0.34f, h * 0.12f, w * 0.42f, h * 0.18f)
+                        lineTo(w * 0.32f, h * 0.28f)
+                        quadraticTo(w * 0.46f, h * 0.48f, w * 0.64f, h * 0.64f)
+                        lineTo(w * 0.74f, h * 0.54f)
+                        quadraticTo(w * 0.82f, h * 0.62f, w * 0.70f, h * 0.76f)
+                        quadraticTo(w * 0.44f, h * 0.82f, w * 0.20f, h * 0.56f)
+                        quadraticTo(w * 0.08f, h * 0.36f, w * 0.20f, h * 0.24f)
+                        close()
+                    }
+                    drawPath(path = shadowHandsetPath, color = Color.Black.copy(alpha = 0.25f))
+                    drawContext.canvas.restore()
+
+                    // Glowing Cyan Handset receiver
+                    val handsetPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.20f, h * 0.24f)
+                        quadraticTo(w * 0.34f, h * 0.12f, w * 0.42f, h * 0.18f)
+                        lineTo(w * 0.32f, h * 0.28f)
+                        quadraticTo(w * 0.46f, h * 0.48f, w * 0.64f, h * 0.64f)
+                        lineTo(w * 0.74f, h * 0.54f)
+                        quadraticTo(w * 0.82f, h * 0.62f, w * 0.70f, h * 0.76f)
+                        quadraticTo(w * 0.44f, h * 0.82f, w * 0.20f, h * 0.56f)
+                        quadraticTo(w * 0.08f, h * 0.36f, w * 0.20f, h * 0.24f)
+                        close()
+                    }
+
+                    drawPath(
+                        path = handsetPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF00E5FF), Color(0xFF008CCF), Color(0xFF005FAA))
+                        )
+                    )
+
+                    // Ambient highlight gloss line across the upper edge of receiver
+                    val highlightPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.21f, h * 0.26f)
+                        quadraticTo(w * 0.30f, h * 0.18f, w * 0.38f, h * 0.22f)
+                        quadraticTo(w * 0.44f, h * 0.35f, w * 0.54f, h * 0.48f)
+                        quadraticTo(w * 0.62f, h * 0.58f, w * 0.68f, h * 0.64f)
+                    }
+                    drawPath(
+                        path = highlightPath,
+                        color = Color.White.copy(alpha = 0.5f),
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    // Little sound speaker slots in top lobe (classic details)
+                    drawCircle(color = Color(0x33000000), radius = 1.dp.toPx(), center = Offset(w * 0.28f, h * 0.24f))
+                    drawCircle(color = Color(0x33000000), radius = 1.dp.toPx(), center = Offset(w * 0.32f, h * 0.22f))
+                    drawCircle(color = Color(0x33000000), radius = 1.dp.toPx(), center = Offset(w * 0.30f, h * 0.26f))
+                }
             }
         }
         AppType.BROWSER -> {
@@ -4784,12 +8606,99 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 modifier = modifier.size(54.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_browser_icon),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val cx = w * 0.5f
+                    val cy = h * 0.5f
+                    val r = w * 0.44f
+
+                    // Shadow behind the globe
+                    drawCircle(
+                        color = Color.Black.copy(alpha = 0.3f),
+                        radius = r + 1.dp.toPx(),
+                        center = Offset(cx, cy + 2.dp.toPx())
+                    )
+
+                    // Base Globe Gradient (Blue/Cyan/Ocean)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFF00B2EE), Color(0xFF005F9E), Color(0xFF002F6C)),
+                            center = Offset(cx - r * 0.2f, cy - r * 0.2f),
+                            radius = r * 1.5f
+                        ),
+                        radius = r,
+                        center = Offset(cx, cy)
+                    )
+
+                    // Clip to globe circle for lines
+                    val globePath = androidx.compose.ui.graphics.Path().apply {
+                        addOval(Rect(cx - r, cy - r, cx + r, cy + r))
+                    }
+
+                    drawContext.canvas.save()
+                    drawContext.canvas.clipPath(globePath)
+
+                    // Horizontal glowing latitude lines (with gaps, similar to grid / continent texture in browser.png)
+                    val linesCount = 8
+                    for (i in 1..linesCount) {
+                        val fraction = i.toFloat() / (linesCount + 1)
+                        val y = cy - r + (r * 2 * fraction)
+                        val dist = Math.abs(fraction - 0.5f) * 2f
+                        val thickness = (4.dp.toPx() * (1f - dist * 0.5f)).coerceAtLeast(1.5.dp.toPx())
+                        
+                        drawLine(
+                            color = Color(0xCCFFFFFF),
+                            start = Offset(cx - r, y),
+                            end = Offset(cx + r, y),
+                            strokeWidth = thickness
+                        )
+                    }
+
+                    // Curved vertical longitude arcs (left and right)
+                    drawOval(
+                        color = Color(0x88FFFFFF),
+                        style = Stroke(width = 2.dp.toPx()),
+                        topLeft = Offset(cx - r * 0.5f, cy - r),
+                        size = Size(r, r * 2)
+                    )
+                    drawOval(
+                        color = Color(0x55FFFFFF),
+                        style = Stroke(width = 1.dp.toPx()),
+                        topLeft = Offset(cx - r * 0.8f, cy - r),
+                        size = Size(r * 1.6f, r * 2)
+                    )
+
+                    // Bright cyan/pink light leak glow at the top rim like browser.png
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFFFF007F).copy(alpha = 0.6f), Color.Transparent),
+                            center = Offset(cx, cy - r * 0.9f),
+                            radius = r * 0.8f
+                        ),
+                        radius = r,
+                        center = Offset(cx, cy)
+                    )
+
+                    // Ambient glossy/glassy lighting reflection on top right hemisphere
+                    drawOval(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.White.copy(alpha = 0.5f), Color.Transparent)
+                        ),
+                        topLeft = Offset(cx - r * 0.6f, cy - r * 0.8f),
+                        size = Size(r * 1.2f, r * 0.6f)
+                    )
+
+                    drawContext.canvas.restore()
+
+                    // Glow outer outline ring
+                    drawCircle(
+                        color = Color(0x33FFFFFF),
+                        radius = r,
+                        center = Offset(cx, cy),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                }
             }
         }
         AppType.MESSAGING -> {
@@ -4797,12 +8706,61 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 modifier = modifier.size(54.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_messages_icon),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // Shadow behind the speech bubble
+                    val shadowPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.12f, h * 0.12f + 2.dp.toPx())
+                        lineTo(w * 0.88f, h * 0.12f + 2.dp.toPx())
+                        lineTo(w * 0.88f, h * 0.72f + 2.dp.toPx())
+                        lineTo(w * 0.32f, h * 0.72f + 2.dp.toPx())
+                        lineTo(w * 0.20f, h * 0.88f + 2.dp.toPx())
+                        lineTo(w * 0.20f, h * 0.72f + 2.dp.toPx())
+                        lineTo(w * 0.12f, h * 0.72f + 2.dp.toPx())
+                        close()
+                    }
+                    drawPath(path = shadowPath, color = Color.Black.copy(alpha = 0.25f))
+
+                    // Green Speech bubble with rounded corners
+                    val bubbleRect = Rect(w * 0.08f, h * 0.10f, w * 0.92f, h * 0.70f)
+                    val bubblePath = androidx.compose.ui.graphics.Path().apply {
+                        addRoundRect(RoundRect(bubbleRect, CornerRadius(8.dp.toPx(), 8.dp.toPx())))
+                        // Pointer at bottom left
+                        moveTo(w * 0.28f, h * 0.70f)
+                        lineTo(w * 0.22f, h * 0.88f)
+                        quadraticTo(w * 0.24f, h * 0.78f, w * 0.40f, h * 0.70f)
+                        close()
+                    }
+
+                    drawPath(
+                        path = bubblePath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF99CC00), Color(0xFF669900))
+                        )
+                    )
+
+                    // Outer stroke of the green bubble
+                    drawPath(
+                        path = bubblePath,
+                        color = Color(0xFF7CA300),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+
+                    // Smiley face (from messaging.png)
+                    val smileyColor = Color.White
+                    drawCircle(color = smileyColor, radius = 2.5.dp.toPx(), center = Offset(w * 0.36f, h * 0.34f))
+                    drawCircle(color = smileyColor, radius = 2.5.dp.toPx(), center = Offset(w * 0.64f, h * 0.34f))
+
+                    val smilePath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.28f, h * 0.45f)
+                        quadraticTo(w * 0.5f, h * 0.62f, w * 0.72f, h * 0.45f)
+                        quadraticTo(w * 0.5f, h * 0.55f, w * 0.28f, h * 0.45f)
+                        close()
+                    }
+                    drawPath(path = smilePath, color = smileyColor)
+                }
             }
         }
         AppType.CAMERA -> {
@@ -4810,12 +8768,158 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 modifier = modifier.size(54.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_camera_icon),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    // Shadow
+                    drawRoundRect(
+                        color = Color.Black.copy(alpha = 0.35f),
+                        topLeft = Offset(w * 0.08f, h * 0.26f),
+                        size = Size(w * 0.84f, h * 0.62f),
+                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                    )
+
+                    // Metallic top chassis (silver cap)
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFFE2E2E2), Color(0xFFB0B0B0))
+                        ),
+                        topLeft = Offset(w * 0.08f, h * 0.22f),
+                        size = Size(w * 0.84f, h * 0.24f),
+                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                    )
+
+                    // Shutter button (metallic on top-left)
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFFF0F0F0), Color(0xFF999999))
+                        ),
+                        topLeft = Offset(w * 0.16f, h * 0.16f),
+                        size = Size(w * 0.18f, h * 0.08f),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+
+                    // Red/amber LED window on top-right (sensor/flash indicator)
+                    drawRoundRect(
+                        color = Color(0xFFEAEAEA),
+                        topLeft = Offset(w * 0.66f, h * 0.28f),
+                        size = Size(w * 0.16f, h * 0.08f),
+                        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
+                    )
+
+                    // Textured bottom body (black leather style)
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF28282B), Color(0xFF141416))
+                        ),
+                        topLeft = Offset(w * 0.08f, h * 0.44f),
+                        size = Size(w * 0.84f, h * 0.42f),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                    )
+
+                    // Main central camera lens barrel (outer ring)
+                    drawCircle(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF555555), Color(0xFF222222))
+                        ),
+                        radius = w * 0.25f,
+                        center = Offset(w * 0.5f, h * 0.58f)
+                    )
+                    drawCircle(
+                        color = Color(0xFF121212),
+                        radius = w * 0.22f,
+                        center = Offset(w * 0.5f, h * 0.58f)
+                    )
+
+                    // Glass lens element (gorgeous deep blue / cyan radial gradient reflecting camera.png)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFF00A3FF), Color(0xFF003C9E), Color(0xFF000830)),
+                            center = Offset(w * 0.46f, h * 0.54f),
+                            radius = w * 0.18f
+                        ),
+                        radius = w * 0.18f,
+                        center = Offset(w * 0.5f, h * 0.58f)
+                    )
+
+                    // Camera glass specular reflection / glare (angled white soft glare ellipse)
+                    drawOval(
+                        color = Color.White.copy(alpha = 0.55f),
+                        topLeft = Offset(w * 0.40f, h * 0.48f),
+                        size = Size(w * 0.14f, w * 0.07f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.2f),
+                        radius = w * 0.03f,
+                        center = Offset(w * 0.60f, h * 0.66f)
+                    )
+                }
+            }
+        }
+        AppType.DOWNLOADS -> {
+            Box(
+                modifier = modifier.size(54.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // Outer dark circle (metallic gradient)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFF3C3D42), Color(0xFF1E1F22))
+                        ),
+                        radius = w * 0.45f,
+                        center = Offset(w * 0.5f, h * 0.5f)
+                    )
+
+                    // Inner circle
+                    drawCircle(
+                        color = Color(0xFF111113),
+                        radius = w * 0.35f,
+                        center = Offset(w * 0.5f, h * 0.5f)
+                    )
+
+                    // Green Arrow
+                    val arrowWidth = w * 0.16f
+                    val arrowHeadSize = w * 0.32f
+                    val cx = w * 0.5f
+                    val topY = h * 0.28f
+                    val arrowLength = h * 0.32f
+                    val shaftEndY = topY + arrowLength
+
+                    // Arrow shaft (green line/rectangle)
+                    drawLine(
+                        color = Color(0xFF99CC00),
+                        start = Offset(cx, topY),
+                        end = Offset(cx, shaftEndY),
+                        strokeWidth = arrowWidth,
+                        cap = StrokeCap.Butt
+                    )
+
+                    // Arrow head (triangle)
+                    val headPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(cx - arrowHeadSize * 0.5f, shaftEndY)
+                        lineTo(cx + arrowHeadSize * 0.5f, shaftEndY)
+                        lineTo(cx, shaftEndY + arrowHeadSize * 0.5f)
+                        close()
+                    }
+                    drawPath(
+                        path = headPath,
+                        color = Color(0xFF99CC00)
+                    )
+
+                    // Horizontal line under arrow
+                    drawLine(
+                        color = Color(0xFF99CC00),
+                        start = Offset(cx - arrowHeadSize * 0.6f, shaftEndY + arrowHeadSize * 0.8f),
+                        end = Offset(cx + arrowHeadSize * 0.6f, shaftEndY + arrowHeadSize * 0.8f),
+                        strokeWidth = 3.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
             }
         }
         AppType.SETTINGS -> {
@@ -5140,6 +9244,93 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val w = size.width
                     val h = size.height
+                    val cx = w * 0.5f
+                    val cy = h * 0.5f
+                    val r = w * 0.44f
+
+                    // Shadow
+                    drawCircle(
+                        color = Color.Black.copy(alpha = 0.3f),
+                        radius = r,
+                        center = Offset(cx, cy + 1.5.dp.toPx())
+                    )
+
+                    // Outer clean white bezel/rim
+                    drawCircle(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFFFCFCFC), Color(0xFFE5E5E8))
+                        ),
+                        radius = r,
+                        center = Offset(cx, cy)
+                    )
+
+                    // Inner slate-gray clock face
+                    val faceRadius = r * 0.88f
+                    drawCircle(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF2C2D32), Color(0xFF1E1E22))
+                        ),
+                        radius = faceRadius,
+                        center = Offset(cx, cy)
+                    )
+
+                    // White hour tick marks (subtle)
+                    for (angle in 0 until 360 step 30) {
+                        val rad = Math.toRadians(angle.toDouble())
+                        val length = if (angle % 90 == 0) 3.dp.toPx() else 1.5.dp.toPx()
+                        val thickness = if (angle % 90 == 0) 1.5.dp.toPx() else 1.dp.toPx()
+                        val startDist = faceRadius - length - 2.dp.toPx()
+                        val endDist = faceRadius - 2.dp.toPx()
+
+                        drawLine(
+                            color = Color(0x88FFFFFF),
+                            start = Offset(cx + (Math.cos(rad) * startDist).toFloat(), cy + (Math.sin(rad) * startDist).toFloat()),
+                            end = Offset(cx + (Math.cos(rad) * endDist).toFloat(), cy + (Math.sin(rad) * endDist).toFloat()),
+                            strokeWidth = thickness
+                        )
+                    }
+
+                    // Hour Hand: white, pointing towards 10 o'clock (angle 210 degrees)
+                    val hrAngle = 210.0
+                    val hrRad = Math.toRadians(hrAngle)
+                    val hrLen = faceRadius * 0.5f
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(cx - (Math.cos(hrRad) * 4.dp.toPx()).toFloat(), cy - (Math.sin(hrRad) * 4.dp.toPx()).toFloat()),
+                        end = Offset(cx + (Math.cos(hrRad) * hrLen).toFloat(), cy + (Math.sin(hrRad) * hrLen).toFloat()),
+                        strokeWidth = 2.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+
+                    // Minute Hand: white, pointing towards 2 o'clock (angle 330 degrees)
+                    val minAngle = 330.0
+                    val minRad = Math.toRadians(minAngle)
+                    val minLen = faceRadius * 0.75f
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(cx - (Math.cos(minRad) * 4.dp.toPx()).toFloat(), cy - (Math.sin(minRad) * 4.dp.toPx()).toFloat()),
+                        end = Offset(cx + (Math.cos(minRad) * minLen).toFloat(), cy + (Math.sin(minRad) * minLen).toFloat()),
+                        strokeWidth = 2.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+
+                    // Second Hand: bright neon orange/red, pointing towards 12 o'clock (90 degrees)
+                    val secAngle = 90.0
+                    val secRad = Math.toRadians(secAngle)
+                    val secLen = faceRadius * 0.85f
+                    drawLine(
+                        color = Color(0xFFFF4444),
+                        start = Offset(cx - (Math.cos(secRad) * 6.dp.toPx()).toFloat(), cy - (Math.sin(secRad) * 6.dp.toPx()).toFloat()),
+                        end = Offset(cx + (Math.cos(secRad) * secLen).toFloat(), cy + (Math.sin(secRad) * secLen).toFloat()),
+                        strokeWidth = 1.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+
+                    // Center pin (white caps)
+                    drawCircle(color = Color.White, radius = 2.5.dp.toPx(), center = Offset(cx, cy))
+                    drawCircle(color = Color(0xFFFF4444), radius = 1.dp.toPx(), center = Offset(cx, cy))
+
+                    if (false) {
 
                     // Clock metal bells
                     drawCircle(color = Color(0xFF666666), radius = w * 0.12f, center = Offset(w * 0.22f, h * 0.22f))
@@ -5184,8 +9375,7 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                     val minY = (h * 0.52f + Math.sin(minRad) * (h * 0.3f)).toFloat()
                     drawLine(color = Color.White, start = Offset(w * 0.5f, h * 0.52f), end = Offset(minX, minY), strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
 
-                    // Pin in center
-                    drawCircle(color = Color(0xFF33B5E5), radius = 3.dp.toPx(), center = Offset(w * 0.5f, h * 0.52f))
+                    }
                 }
             }
         }
@@ -5356,6 +9546,173 @@ fun JellyBeanAppIcon(app: AppType, modifier: Modifier = Modifier) {
                 }
             }
         }
+        AppType.FILE_MANAGER -> {
+            Box(
+                modifier = modifier.size(54.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    val folderPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.12f, h * 0.22f)
+                        lineTo(w * 0.42f, h * 0.22f)
+                        lineTo(w * 0.52f, h * 0.35f)
+                        lineTo(w * 0.88f, h * 0.35f)
+                        lineTo(w * 0.88f, h * 0.82f)
+                        lineTo(w * 0.12f, h * 0.82f)
+                        close()
+                    }
+                    
+                    drawPath(
+                        path = folderPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF424242), Color(0xFF212121))
+                        )
+                    )
+                    
+                    val pocketPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(w * 0.12f, h * 0.48f)
+                        lineTo(w * 0.88f, h * 0.48f)
+                        lineTo(w * 0.88f, h * 0.82f)
+                        lineTo(w * 0.12f, h * 0.82f)
+                        close()
+                    }
+                    
+                    drawPath(
+                        path = pocketPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF33B5E5).copy(alpha = 0.8f), Color(0xFF0099CC).copy(alpha = 0.8f))
+                        )
+                    )
+                    
+                    drawPath(
+                        path = folderPath,
+                        color = Color.White.copy(alpha = 0.2f),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                }
+            }
+        }
+        AppType.THEMES -> {
+            Box(
+                modifier = modifier.size(54.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color.White, Color.Transparent),
+                            radius = w * 0.48f
+                        ),
+                        radius = w * 0.48f
+                    )
+                    
+                    val colors = listOf(Color(0xFF33B5E5), Color(0xFF99CC00), Color(0xFFFFBB33), Color(0xFFFF4444), Color(0xFFBA68C8))
+                    val angles = listOf(0f, 72f, 144f, 216f, 288f)
+                    
+                    for (i in colors.indices) {
+                        val rad = Math.toRadians(angles[i].toDouble())
+                        val cx = (w * 0.5f + Math.cos(rad) * (w * 0.24f)).toFloat()
+                        val cy = (h * 0.5f + Math.sin(rad) * (h * 0.24f)).toFloat()
+                        drawCircle(
+                            color = colors[i],
+                            radius = w * 0.15f,
+                            center = Offset(cx, cy)
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.4f),
+                            radius = w * 0.15f,
+                            center = Offset(cx, cy),
+                            style = Stroke(width = 1.dp.toPx())
+                        )
+                    }
+                }
+            }
+        }
+        AppType.AI_GENERATOR -> {
+            Box(
+                modifier = modifier.size(54.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // Glowing Holo background circle
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFF33B5E5).copy(alpha = 0.4f), Color.Transparent),
+                            radius = w * 0.48f
+                        ),
+                        radius = w * 0.48f
+                    )
+
+                    // Base glass dark/cyan button
+                    drawCircle(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF2C2C2C), Color(0xFF151515))
+                        ),
+                        radius = w * 0.38f
+                    )
+
+                    // Holo cyan ring
+                    drawCircle(
+                        color = Color(0xFF33B5E5),
+                        radius = w * 0.38f,
+                        style = Stroke(width = 1.5.dp.toPx())
+                    )
+                }
+
+                // AutoAwesome AI Sparkles inside the orb
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = Color(0xFF33B5E5),
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+        }
+        AppType.SOUND_RECORDER -> {
+            Box(
+                modifier = modifier.size(54.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    
+                    // Cassette tape background
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color(0xFF3A3A3A), Color(0xFF1C1C1C))
+                        ),
+                        topLeft = Offset(w * 0.1f, h * 0.22f),
+                        size = Size(w * 0.8f, h * 0.56f),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                    )
+                    
+                    // Cyan cassette accent labels
+                    drawRect(
+                        color = Color(0xFF33B5E5),
+                        topLeft = Offset(w * 0.2f, h * 0.35f),
+                        size = Size(w * 0.6f, h * 0.14f)
+                    )
+                    
+                    // Left and right tape wheels
+                    drawCircle(color = Color.Black, radius = w * 0.09f, center = Offset(w * 0.35f, h * 0.53f))
+                    drawCircle(color = Color.Black, radius = w * 0.09f, center = Offset(w * 0.65f, h * 0.53f))
+                    
+                    // Gear teeth in wheels
+                    drawCircle(color = Color.LightGray, radius = w * 0.035f, center = Offset(w * 0.35f, h * 0.53f))
+                    drawCircle(color = Color.LightGray, radius = w * 0.035f, center = Offset(w * 0.65f, h * 0.53f))
+                }
+            }
+        }
     }
 }
 
@@ -5407,7 +9764,7 @@ fun DesktopIconItem(appName: String, drawableRes: Int, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clickable { onClick() }
+            .holoTap(shape = RoundedCornerShape(8.dp), onClick = onClick)
             .padding(8.dp)
     ) {
         Image(
@@ -5470,5 +9827,664 @@ fun DockIconItem(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun JellyBeanAnalogClock(
+    modifier: Modifier = Modifier,
+    tint: Color = Color(0xFF33B5E5)
+) {
+    var calendar by remember { mutableStateOf(java.util.Calendar.getInstance()) }
+    
+    // Smooth ticker
+    LaunchedEffect(Unit) {
+        while (true) {
+            calendar = java.util.Calendar.getInstance()
+            delay(1000)
+        }
+    }
+    
+    val hour = calendar.get(java.util.Calendar.HOUR)
+    val minute = calendar.get(java.util.Calendar.MINUTE)
+    val second = calendar.get(java.util.Calendar.SECOND)
+    
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val r = size.minDimension / 2 * 0.9f
+        val center = Offset(w / 2, h / 2)
+        
+        // Face background - retro semi-transparent dark circle
+        drawCircle(
+            color = Color.Black.copy(alpha = 0.35f),
+            radius = r,
+            center = center
+        )
+        // Thin glowing cyan border
+        drawCircle(
+            color = tint.copy(alpha = 0.8f),
+            radius = r,
+            center = center,
+            style = Stroke(width = 1.5.dp.toPx())
+        )
+        
+        // Hour dial ticks (12 hour markers)
+        for (i in 0 until 12) {
+            val angle = i * 30.0
+            val rad = Math.toRadians(angle)
+            val outerX = (center.x + Math.cos(rad) * r).toFloat()
+            val outerY = (center.y + Math.sin(rad) * r).toFloat()
+            
+            val innerLen = if (i % 3 == 0) r * 0.82f else r * 0.88f
+            val innerX = (center.x + Math.cos(rad) * innerLen).toFloat()
+            val innerY = (center.y + Math.sin(rad) * innerLen).toFloat()
+            
+            drawLine(
+                color = if (i % 3 == 0) tint else Color.White.copy(alpha = 0.6f),
+                start = Offset(innerX, innerY),
+                end = Offset(outerX, outerY),
+                strokeWidth = if (i % 3 == 0) 2.5.dp.toPx() else 1.5.dp.toPx()
+            )
+        }
+        
+        // Draw Hour Hand
+        val hourAngle = (hour + minute / 60f) * 30.0 - 90.0
+        val hourRad = Math.toRadians(hourAngle)
+        val hourLen = r * 0.52f
+        val hourX = (center.x + Math.cos(hourRad) * hourLen).toFloat()
+        val hourY = (center.y + Math.sin(hourRad) * hourLen).toFloat()
+        drawLine(
+            color = Color.White,
+            start = center,
+            end = Offset(hourX, hourY),
+            strokeWidth = 4.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        
+        // Draw Minute Hand
+        val minAngle = (minute + second / 60f) * 6.0 - 90.0
+        val minRad = Math.toRadians(minAngle)
+        val minLen = r * 0.75f
+        val minX = (center.x + Math.cos(minRad) * minLen).toFloat()
+        val minY = (center.y + Math.sin(minRad) * minLen).toFloat()
+        drawLine(
+            color = Color.White,
+            start = center,
+            end = Offset(minX, minY),
+            strokeWidth = 2.5.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        
+        // Draw Second Hand (Classic Red / Orange)
+        val secAngle = second * 6.0 - 90.0
+        val secRad = Math.toRadians(secAngle)
+        val secLen = r * 0.82f
+        val secX = (center.x + Math.cos(secRad) * secLen).toFloat()
+        val secY = (center.y + Math.sin(secRad) * secLen).toFloat()
+        drawLine(
+            color = Color(0xFFFF4444),
+            start = center,
+            end = Offset(secX, secY),
+            strokeWidth = 1.2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        
+        // Center Pin with glowing core
+        drawCircle(color = Color(0xFFFF4444), radius = 4.dp.toPx(), center = center)
+        drawCircle(color = Color.White, radius = 1.5.dp.toPx(), center = center)
+    }
+}
+
+@Composable
+fun SoundRecorderActivity(viewModel: JellyBeanViewModel) {
+    val state by viewModel.recorderState.collectAsState()
+    val duration by viewModel.recorderDuration.collectAsState()
+    val hasRecording by viewModel.recorderHasRecording.collectAsState()
+    val visualizerHeights by viewModel.recorderVisualizerHeights.collectAsState()
+
+    // Rotación de carretes de cinta para la animación de cassette
+    val infiniteTransition = rememberInfiniteTransition()
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        )
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF151515))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // App title banner
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(Color(0xFF2E2E2E), RoundedCornerShape(4.dp))
+                    .padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawRect(color = Color(0xFF33B5E5), size = size * 0.5f, topLeft = Offset(size.width * 0.25f, size.height * 0.25f))
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text("GRABADORA DE VOZ", color = Color(0xFF33B5E5), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Simulador de cinta magnética Holo", color = Color.Gray, fontSize = 11.sp)
+            }
+        }
+
+        // Cassette visual design card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF222222)),
+            border = BorderStroke(1.5.dp, Color(0xFF444444)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // Glass gloss lines
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.05f),
+                        start = Offset(0f, 0f),
+                        end = Offset(w, h),
+                        strokeWidth = 8f
+                    )
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Top cassette brand label
+                    Text(
+                        text = "TDK  D90  HOLO HIGH BIAS",
+                        color = Color(0xFF33B5E5).copy(alpha = 0.8f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    // Tape window with wheels
+                    Row(
+                        modifier = Modifier
+                            .width(180.dp)
+                            .height(60.dp)
+                            .background(Color.Black, RoundedCornerShape(4.dp))
+                            .border(1.dp, Color(0xFF555555), RoundedCornerShape(4.dp)),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Left Wheel
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .graphicsLayer {
+                                    if (state == "RECORDING" || state == "PLAYING") {
+                                        rotationZ = rotationAngle
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                drawCircle(color = Color(0xFF222222), radius = size.width * 0.48f)
+                                drawCircle(color = Color.LightGray, radius = size.width * 0.25f)
+                                // Teeth spokes
+                                for (i in 0 until 6) {
+                                    val angle = i * 60.0
+                                    val rad = Math.toRadians(angle)
+                                    val rx = (size.width / 2 + Math.cos(rad) * (size.width * 0.38f)).toFloat()
+                                    val ry = (size.height / 2 + Math.sin(rad) * (size.height * 0.38f)).toFloat()
+                                    drawLine(color = Color.Black, start = Offset(size.width / 2, size.height / 2), end = Offset(rx, ry), strokeWidth = 3f)
+                                }
+                            }
+                        }
+
+                        // Center magnetic tape background strip
+                        Box(
+                            modifier = Modifier
+                                .width(60.dp)
+                                .height(30.dp)
+                                .background(Color(0xFF1E1510)), // tape brown
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "JB-4.1",
+                                color = Color.Gray.copy(alpha = 0.5f),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        // Right Wheel
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .graphicsLayer {
+                                    if (state == "RECORDING" || state == "PLAYING") {
+                                        rotationZ = rotationAngle
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                drawCircle(color = Color(0xFF222222), radius = size.width * 0.48f)
+                                drawCircle(color = Color.LightGray, radius = size.width * 0.25f)
+                                // Teeth spokes
+                                for (i in 0 until 6) {
+                                    val angle = i * 60.0
+                                    val rad = Math.toRadians(angle)
+                                    val rx = (size.width / 2 + Math.cos(rad) * (size.width * 0.38f)).toFloat()
+                                    val ry = (size.height / 2 + Math.sin(rad) * (size.height * 0.38f)).toFloat()
+                                    drawLine(color = Color.Black, start = Offset(size.width / 2, size.height / 2), end = Offset(rx, ry), strokeWidth = 3f)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Audio LED Meter visualizer
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        visualizerHeights.forEach { hVal ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 2.dp)
+                                    .width(6.dp)
+                                    .height(hVal.dp)
+                                    .background(
+                                        if (state == "RECORDING") Color(0xFFFF4444)
+                                        else if (state == "PLAYING") Color(0xFF99CC00)
+                                        else Color.DarkGray,
+                                        RoundedCornerShape(1.dp)
+                                    )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Timer duration and state layout
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            val mins = duration / 60
+            val secs = duration % 60
+            Text(
+                text = String.format("%02d:%02d", mins, secs),
+                color = Color.White,
+                fontSize = 42.sp,
+                fontWeight = FontWeight.Light,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = when (state) {
+                    "RECORDING" -> "• GRABANDO EN DIRECTO"
+                    "PLAYING" -> "REPRODUCIENDO GRABACIÓN"
+                    else -> if (hasRecording) "GRABACIÓN COMPLETADA" else "LISTO PARA GRABAR"
+                },
+                color = when (state) {
+                    "RECORDING" -> Color(0xFFFF4444)
+                    "PLAYING" -> Color(0xFF99CC00)
+                    else -> Color(0xFF33B5E5)
+                },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+        }
+
+        // Audio controls row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // DETENER button (Holo Styled Square)
+            Button(
+                onClick = { viewModel.stopRecording() },
+                enabled = state != "IDLE",
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2E2E2E),
+                    disabledContainerColor = Color(0xFF1A1A1A)
+                ),
+                border = BorderStroke(1.dp, if (state != "IDLE") Color.White else Color.DarkGray),
+                shape = RoundedCornerShape(2.dp),
+                modifier = Modifier.size(54.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .background(if (state != "IDLE") Color.White else Color.DarkGray)
+                )
+            }
+
+            // GRABAR button (Big red circle)
+            Button(
+                onClick = { viewModel.startRecording() },
+                enabled = state == "IDLE",
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF3A1212),
+                    disabledContainerColor = Color(0xFF1A1A1A)
+                ),
+                border = BorderStroke(2.dp, if (state == "IDLE") Color(0xFFFF4444) else Color.DarkGray),
+                shape = CircleShape,
+                modifier = Modifier.size(72.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(if (state == "IDLE") Color(0xFFFF4444) else Color.DarkGray)
+                )
+            }
+
+            // REPRODUCIR button (Triangle play)
+            Button(
+                onClick = { viewModel.startPlaying() },
+                enabled = state == "IDLE" && hasRecording,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1B3212),
+                    disabledContainerColor = Color(0xFF1A1A1A)
+                ),
+                border = BorderStroke(2.dp, if (state == "IDLE" && hasRecording) Color(0xFF99CC00) else Color.DarkGray),
+                shape = CircleShape,
+                modifier = Modifier.size(72.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Reproducir",
+                    tint = if (state == "IDLE" && hasRecording) Color(0xFF99CC00) else Color.DarkGray,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DownloadsActivity(viewModel: JellyBeanViewModel) {
+    val downloadsList by viewModel.downloads.collectAsState()
+    var showDialog by remember { mutableStateOf(false) }
+    var inputFileName by remember { mutableStateOf("jelly_bean_ota_update.zip") }
+    var inputFileSize by remember { mutableStateOf("45.2 MB") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF151515))
+            .padding(16.dp)
+    ) {
+        // App title banner with Holo theme styling
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(Color(0xFF2E2E2E), RoundedCornerShape(4.dp))
+                    .padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                JellyBeanAppIcon(app = AppType.DOWNLOADS, modifier = Modifier.fillMaxSize())
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text("DESCARGAS", color = Color(0xFF33B5E5), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Gestor de descargas de Jelly Bean 4.1", color = Color.Gray, fontSize = 11.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Actions Row: Download New or Clear
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = { showDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E2E2E)),
+                border = BorderStroke(1.dp, Color(0xFF33B5E5)),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Nueva Descarga",
+                    tint = Color(0xFF33B5E5),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Nueva Descarga", color = Color.White, fontSize = 12.sp)
+            }
+
+            Button(
+                onClick = { viewModel.clearDownloads() },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+                border = BorderStroke(1.dp, Color.DarkGray),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Limpiar Todo",
+                    tint = Color.LightGray,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Limpiar Lista", color = Color.LightGray, fontSize = 12.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Downloads List
+        if (downloadsList.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = Color.DarkGray,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No hay descargas activas", color = Color.Gray, fontSize = 14.sp)
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                items(downloadsList) { download ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF222222)),
+                        border = BorderStroke(
+                            1.dp,
+                            if (download.progress < 100) Color(0xFF33B5E5) else Color(0xFF444444)
+                        ),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (download.progress < 100) Icons.Default.Downloading else Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = if (download.progress < 100) Color(0xFF33B5E5) else Color(0xFF99CC00),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = download.name,
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Text(
+                                    text = download.size,
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Linear Progress Bar or Status Text
+                            if (download.progress < 100) {
+                                LinearProgressIndicator(
+                                    progress = { download.progress / 100f },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(4.dp),
+                                    color = Color(0xFF33B5E5),
+                                    trackColor = Color.DarkGray,
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = download.status,
+                                    color = if (download.progress < 100) Color(0xFF33B5E5) else Color(0xFF99CC00),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (download.progress < 100) "${download.progress}%" else "Listo",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Custom Download Dialog
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = {
+                Text(
+                    "Simular Descarga",
+                    color = Color(0xFF33B5E5),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        "Introduce el nombre del archivo para iniciar una descarga simulada con el motor Holo:",
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    OutlinedTextField(
+                        value = inputFileName,
+                        onValueChange = { inputFileName = it },
+                        label = { Text("Nombre del archivo") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF33B5E5),
+                            unfocusedBorderColor = Color.Gray,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = inputFileSize,
+                        onValueChange = { inputFileSize = it },
+                        label = { Text("Tamaño estimado") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF33B5E5),
+                            unfocusedBorderColor = Color.Gray,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDialog = false
+                        viewModel.startSimulatedDownload(inputFileName, inputFileSize)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E2E2E)),
+                    border = BorderStroke(1.dp, Color(0xFF33B5E5))
+                ) {
+                    Text("Descargar", color = Color(0xFF33B5E5))
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent)
+                ) {
+                    Text("Cancelar", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E),
+            textContentColor = Color.LightGray
+        )
     }
 }
